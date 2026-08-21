@@ -1,0 +1,38 @@
+# --- secrets -----------------------------------------------------------
+# Never commit a real key. .env.example documents the shape instead.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets.json
+
+# --- generated data ----------------------------------------------------
+# Reproducible from `python -m datagen.generate --seed 42`
+data/
+samples/
+datagen/expected_labels.json
+
+# --- python ------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- os / editor -------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# --- runtime -----------------------------------------------------------
+*.log
+*.db
+*.db-wal
+*.db-shm
+.streamlit/secrets.toml
