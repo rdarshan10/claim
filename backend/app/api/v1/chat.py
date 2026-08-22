@@ -137,7 +137,9 @@ def _suggestions(customer_id: str) -> list[str]:
         return ["Where is my claim?", "What does 'excess' mean?", "Talk to a person"]
 
     checklist = claim_repo.checklist(open_claims[0]["id"], customer_id)
-    outstanding = checklist["outstanding_mandatory"]
+    # Only what they still have to send — offering "how do I get a police
+    # report?" for one already with a handler is noise.
+    outstanding = checklist["awaiting_customer"]
 
     if outstanding:
         chips = ["What do you still need from me?"]
@@ -170,7 +172,6 @@ def _handoff_context(conversation_id: str, customer_id: str) -> dict[str, Any] |
     return {
         "ticket_id": ticket["id"],          # internal: used to keep the case current
         "ticket_reference": ticket["id"][:8].upper(),
-        "priority": ticket["priority"],
         "status": ticket["status"],
         "assigned_to": ticket.get("assigned_to"),
         "raised_at": (ticket.get("created_at") or "")[:10],

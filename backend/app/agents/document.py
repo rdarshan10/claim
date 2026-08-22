@@ -19,6 +19,16 @@ GUIDANCE = {
                          "reprint it if you've lost it.",
     "pharmacy_bill": "Your pharmacy can reprint a receipt if you have the prescription date.",
     "id_proof": "A passport or national ID card photographed flat, with all corners visible.",
+    # Home claims — created by FNOL registration, and previously had no guidance
+    # at all, so the checklist named them without saying how to get them.
+    "damage_photos": "Photograph each damaged area in daylight — one wide shot of the "
+                     "room, then close-ups. Include anything ruined that you're claiming for.",
+    "repair_quote": "A written quote from a tradesperson or contractor. It needs their "
+                    "name, the work described, and the total.",
+    "treatment_invoice": "The clinic or hospital can email this. It needs the provider's "
+                         "name, the treatment date and the amount.",
+    "bank_statement": "A statement showing the account you'd like to be paid into — the "
+                      "first page is enough.",
     "bank_statement": "Download a PDF from your banking app — the last 3 months is enough.",
 }
 
@@ -59,12 +69,16 @@ def run(state: GraphState) -> GraphState:
              "state": item["state"], "required": item["mandatory"]}
             for item in checklist["items"]
         ],
-        "outstanding_mandatory": checklist["outstanding_mandatory"],
+        # Only what the customer still has to send. Documents already with a
+        # handler are listed separately so the reply can say "we're checking
+        # it" instead of asking for it again.
+        "documents_we_need_from_you": checklist["awaiting_customer_labels"],
+        "documents_already_with_us": checklist["with_us_labels"],
         "checklist_complete": checklist["complete"],
-        "guidance": {
-            doc_type: GUIDANCE.get(doc_type, "")
-            for doc_type in checklist["outstanding_mandatory"]
-        },
+        # Guidance is deliberately NOT passed to the responder: the card below
+        # the reply already carries it per document, and handing it to the model
+        # made every reply repeat all three how-to paragraphs in prose.
+        # The template fallback still reads it from GUIDANCE directly.
         "recent_rejections": [
             {"document": d.get("doc_type"),
              "headline": d["rejection_payload"].get("headline"),
@@ -81,17 +95,47 @@ def run(state: GraphState) -> GraphState:
         ],
     }
 
-    state.cards.append({
-        "card_type": "checklist",
-        "payload": {
-            "claim_number": claim["claim_number"],
-            "items": [
-                {**item, "guidance": GUIDANCE.get(item["doc_type"], "")}
-                for item in checklist["items"]
-            ],
-            "complete": checklist["complete"],
-        },
-    })
+    # When something is outstanding, the customer needs to act, not just read a
+    # list — the action card carries the guidance and the attach button. The
+    # full checklist is only worth showing once there is nothing left to do,
+    # where it reads as confirmation rather than a to-do list.
+    outstanding = [item for item in checklist["items"]
+                   if item["mandatory"] and item["state"] in ("MISSING", "REJECTED")]
+    with_us = [item for item in checklist["items"]
+               if item["mandatory"] and item["state"] in ("IN_REVIEW", "UPLOADED")]
+    if outstanding or with_us:
+        state.cards.append({
+            "card_type": "action_needed",
+            "payload": {
+                "claim_id": claim["id"],
+                "claim_number": claim["claim_number"],
+                "items": [
+                    {"doc_type": item["doc_type"],
+                     "label": item["doc_type"].replace("_", " "),
+                     "state": item["state"],
+                     "guidance": GUIDANCE.get(item["doc_type"], "")}
+                    for item in outstanding
+                ],
+                "with_us": [
+                    {"doc_type": item["doc_type"],
+                     "label": item["doc_type"].replace("_", " "),
+                     "state": item["state"]}
+                    for item in with_us
+                ],
+            },
+        })
+    else:
+        state.cards.append({
+            "card_type": "checklist",
+            "payload": {
+                "claim_number": claim["claim_number"],
+                "items": [
+                    {**item, "guidance": GUIDANCE.get(item["doc_type"], "")}
+                    for item in checklist["items"]
+                ],
+                "complete": checklist["complete"],
+            },
+        })
 
     # Surface the most recent Smart Rejection Explanation inline (§11.8), but
     # only where the customer still has something to do about it.

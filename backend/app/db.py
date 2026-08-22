@@ -159,6 +159,63 @@ CREATE TABLE IF NOT EXISTS notification (
   sent_at TEXT NOT NULL
 );
 
+-- First Notice of Loss. The customer's intake sits here until a reviewer is
+-- satisfied and the registration bot puts it on the core system; only then does
+-- a row appear in `claim`. Keeping FNOL separate means an abandoned or rejected
+-- notification never pollutes the claims book, and the record of *how* a claim
+-- originated survives after registration.
+CREATE TABLE IF NOT EXISTS fnol_request (
+  id TEXT PRIMARY KEY,
+  reference TEXT NOT NULL UNIQUE,
+  customer_id TEXT NOT NULL REFERENCES customer(id),
+  policy_id TEXT REFERENCES policy(id),
+  conversation_id TEXT,
+  claim_id TEXT REFERENCES claim(id),      -- set once registration succeeds
+  status TEXT NOT NULL DEFAULT 'COLLECTING' CHECK (status IN (
+    'COLLECTING','SUBMITTED','UNDER_REVIEW','INFO_REQUIRED',
+    'READY_TO_REGISTER','REGISTERING','REGISTERED','REJECTED')),
+  claim_type TEXT,
+  answers TEXT NOT NULL DEFAULT '{}',      -- collected field -> value
+  asked TEXT NOT NULL DEFAULT '[]',        -- fields already put to the customer
+  review_note TEXT,
+  reviewer TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fnol_customer ON fnol_request(customer_id);
+CREATE INDEX IF NOT EXISTS idx_fnol_status ON fnol_request(status);
+
+-- Documents attached during intake. Separate from `document` because those
+-- require a claim_id, which does not exist yet at FNOL time. On registration
+-- these are copied across to the new claim.
+CREATE TABLE IF NOT EXISTS fnol_document (
+  id TEXT PRIMARY KEY,
+  fnol_id TEXT NOT NULL REFERENCES fnol_request(id),
+  doc_type TEXT,
+  filename TEXT NOT NULL,
+  storage_key TEXT NOT NULL,
+  content TEXT,
+  uploaded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fnoldoc_fnol ON fnol_document(fnol_id);
+
+-- One registration bot run. Steps stream to the staff console as they happen,
+-- and the row is the audit record of what the bot did on the core system.
+CREATE TABLE IF NOT EXISTS rpa_run (
+  id TEXT PRIMARY KEY,
+  fnol_id TEXT NOT NULL REFERENCES fnol_request(id),
+  status TEXT NOT NULL DEFAULT 'RUNNING' CHECK (status IN (
+    'RUNNING','SUCCEEDED','FAILED')),
+  steps TEXT NOT NULL DEFAULT '[]',
+  frames TEXT NOT NULL DEFAULT '[]',       -- base64 screenshots, newest last
+  result TEXT NOT NULL DEFAULT '{}',
+  error TEXT,
+  started_by TEXT,
+  started_at TEXT NOT NULL,
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rpa_fnol ON rpa_run(fnol_id);
+
 CREATE TABLE IF NOT EXISTS kb_document (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -233,6 +290,28 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     ("message", "relay_source", "TEXT"),
     ("escalation_ticket", "assigned_to", "TEXT"),
     ("escalation_ticket", "resolved_at", "TEXT"),
+    # Who owns the claim. The registration bot picks an adjuster and the
+    # customer is told their name, so it has to be queryable rather than living
+    # only in the chat message and the bot's result blob.
+    ("claim", "handler", "TEXT"),
+    ("claim", "reserve_amount", "REAL"),
+    # Served from the response cache rather than the provider. A real column,
+    # not a suffix on the model name: this is the main cost lever and it has to
+    # be groupable.
+    ("llm_call", "cached", "INTEGER NOT NULL DEFAULT 0"),
+    # A handler works a diary: every open claim carries a date it comes back to
+    # them, and a note of what they are waiting for. Without this, a claim only
+    # resurfaces when the customer chases — which is how claims sit untouched
+    # for months and turn into complaints.
+    ("claim", "next_review_date", "TEXT"),
+    ("claim", "diary_note", "TEXT"),
+    ("claim", "last_chased_at", "TEXT"),
+    ("claim", "chase_count", "INTEGER NOT NULL DEFAULT 0"),
+    # Set when the assistant offers to fetch a person, cleared on the next
+    # turn. Without it a plain "yes" has no antecedent and gets classified as
+    # a fresh question — the customer accepts the offer and is answered about
+    # something else entirely.
+    ("conversation", "offered_human_at", "TEXT"),
 ]
 
 

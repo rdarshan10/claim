@@ -40,25 +40,40 @@ class Settings:
 
     # --- llm -----------------------------------------------------------
     # Model tiering (§10): cheap/fast for the ~90% of calls that are routing and
-    # sentiment; a strong instruction-follower for extraction, empathy and the
-    # Smart Rejection Explanation; a *different provider* as fallback so a single
-    # vendor outage doesn't take the assistant down.
-    llm_base_url: str = os.getenv("LLM_BASE_URL", "https://genailab.tcs.in")
-    llm_model_mini: str = os.getenv("LLM_MODEL_MINI", "azure/genailab-maas-gpt-4.1-mini")
-    llm_model_primary: str = os.getenv("LLM_MODEL_PRIMARY", "azure/genailab-maas-gpt-4.1")
-    llm_model_fallback: str = os.getenv("LLM_MODEL_FALLBACK", "genailab-maas-sonnet-4.6")
-    llm_model_embedding: str = os.getenv(
-        "LLM_MODEL_EMBEDDING", "azure/genailab-maas-text-embedding-3-large"
-    )
-    llm_api_key: str = os.getenv("LLM_API_KEY", os.getenv("API_KEY", ""))
-    llm_verify_ssl: bool = os.getenv("LLM_VERIFY_SSL", "false").lower() == "true"
+    # sentiment; a stronger instruction-follower for extraction, empathy and the
+    # Smart Rejection Explanation.
+    # Provider is Groq (OpenAI-compatible chat completions). The mini tier is the
+    # 20B model — routing and sentiment are easy calls made on every turn, and
+    # the daily request budget is shared, so spend the 120B only where it earns
+    # its keep. Fallback is the 20B again: same vendor, so this is a retry rather
+    # than true cross-provider redundancy — a Groq-wide outage degrades us to
+    # template mode, which is the designed behaviour (UC-N7).
+    llm_base_url: str = os.getenv("LLM_BASE_URL", "https://api.groq.com")
+    llm_model_mini: str = os.getenv("LLM_MODEL_MINI", "openai/gpt-oss-20b")
+    llm_model_primary: str = os.getenv("LLM_MODEL_PRIMARY", "openai/gpt-oss-120b")
+    llm_model_fallback: str = os.getenv("LLM_MODEL_FALLBACK", "openai/gpt-oss-20b")
+    # Unused today (RAG is pure-Python BM25); Groq serves no embedding model.
+    llm_model_embedding: str = os.getenv("LLM_MODEL_EMBEDDING", "")
+    llm_api_key: str = os.getenv("LLM_API_KEY", os.getenv("GROQ_API_KEY", os.getenv("API_KEY", "")))
+    llm_verify_ssl: bool = os.getenv("LLM_VERIFY_SSL", "true").lower() == "true"
     llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "60"))
+    # Most calls here ask for JSON against a closed enum; sampling at 1.0 only
+    # adds format drift for no benefit.
+    llm_temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.2"))
+    # Groq caps this tier at 8K tokens/minute, so a runaway reply would eat the
+    # whole minute's budget in one call.
+    llm_max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "2048"))
     # Fast-fail the first attempt: a dead endpoint should cost seconds, not the
     # full ladder of 60s timeouts in front of a waiting customer.
     llm_first_attempt_timeout: float = float(
         os.getenv("LLM_FIRST_ATTEMPT_TIMEOUT", "20")
     )
     llm_enabled: bool = os.getenv("LLM_ENABLED", "true").lower() == "true"
+
+    # --- registration bot (RPA) ----------------------------------------
+    # Where the bot's browser reaches the core system. Same process serves it,
+    # so this is the app's own address as seen from the bot's browser.
+    rpa_portal_url: str = os.getenv("RPA_PORTAL_URL", "http://127.0.0.1:8010")
 
     # --- guardrails / limits -------------------------------------------
     max_upload_bytes: int = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))

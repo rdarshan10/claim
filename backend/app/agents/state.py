@@ -8,7 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-Intent = Literal["claim_status", "documents", "knowledge", "human_request", "out_of_scope"]
+Intent = Literal["new_claim", "claim_status", "documents", "knowledge",
+                 "human_request", "out_of_scope"]
 Sentiment = Literal["calm", "confused", "frustrated", "distressed"]
 ToneProfile = Literal[
     "neutral-warm", "reassuring", "apologetic-accountable", "celebratory", "gentle-supportive"

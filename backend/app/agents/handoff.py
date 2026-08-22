@@ -241,7 +241,7 @@ def notify_document_decision(customer_id: str, doc_id: str, verdict: str,
 
     if verdict == "VERIFIED":
         body = (f"Good news — I asked {agent_name} in our claims team to look at "
-                f"that document personally, and they've accepted it.")
+                f"that document personally, and they've accepted it as valid evidence.")
     elif verdict == "NEEDS_REVIEW":
         body = (f"{agent_name} is still going through that document. I'll come "
                 f"back to you here as soon as they've decided.")

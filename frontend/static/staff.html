@@ -1,0 +1,1465 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaimCompanion — Staff console</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/app.css">
+<style>
+/* The console is a working surface, not a brochure: tighter type, tighter
+   spacing, monospace figures. Same tokens as the portal, higher density. */
+body { font-size: 14px; }
+.container-wide h2 { font-size: 1.06rem; }
+
+.case-layout { display: grid; grid-template-columns: 268px minmax(0, 1fr) 380px; gap: 14px; align-items: start; }
+@media (max-width: 1400px) { .case-layout { grid-template-columns: 240px minmax(0, 1fr); } .case-tools { grid-column: 1 / -1; } }
+@media (max-width: 980px) { .case-layout { grid-template-columns: 1fr; } }
+
+.panel-box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+             box-shadow: var(--shadow-sm); overflow: hidden; }
+.panel-box > header { padding: 9px 13px; border-bottom: 1px solid var(--line); background: var(--surface-2);
+                      font-size: .79rem; font-weight: 640; text-transform: uppercase;
+                      letter-spacing: .05em; color: var(--ink-3); display: flex; align-items: center; gap: 8px; }
+.panel-box > .inner { padding: 13px; }
+
+/* case list */
+.case-list { max-height: calc(100vh - 190px); overflow-y: auto; }
+.case-row { padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background .1s; }
+.case-row:hover { background: var(--surface-2); }
+.case-row.active { background: var(--indigo-50); box-shadow: inset 3px 0 0 var(--indigo-600); }
+.case-row .who { display: block; text-align: left; font-weight: 600; font-size: .87rem; color: var(--ink); }
+.case-row .meta { font-size: .74rem; color: var(--ink-3); margin-top: 2px; font-family: var(--mono); }
+
+/* conversation transcript */
+.transcript { max-height: 430px; overflow-y: auto; padding: 4px 2px; }
+.t-msg { margin-bottom: 11px; }
+.t-head { font-size: .74rem; color: var(--ink-3); margin-bottom: 3px; display: flex; gap: 7px; align-items: center; }
+.t-head b { color: var(--ink-2); font-weight: 620; }
+.t-head svg { width: 12px; height: 12px; color: var(--navy-800); flex-shrink: 0; }
+/* The transcript scrolls to the bottom on open; padding keeps the first visible
+   line off the container edge instead of clipped against it. */
+.transcript { padding-top: 10px; }
+.t-body { padding: 8px 11px; border-radius: var(--r-sm); font-size: .855rem; line-height: 1.55;
+          border-left: 2px solid var(--line-2); background: var(--surface-2); }
+.t-msg.user .t-body { border-left-color: var(--indigo-500); background: var(--indigo-50); }
+.t-sep { font-size: .72rem; color: var(--ink-4); text-transform: uppercase; letter-spacing: .05em;
+         border-top: 1px solid var(--line); margin: 14px 0 9px; padding-top: 7px; }
+
+/* doc tabs */
+.subtabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 11px; }
+.subtab { appearance: none; border: 0; background: none; font: inherit; font-size: .8rem; font-weight: 560;
+          padding: 6px 10px; color: var(--ink-3); cursor: pointer; border-bottom: 2px solid transparent; }
+.subtab.active { color: var(--indigo-600); border-bottom-color: var(--indigo-600); }
+.subpanel { display: none; } .subpanel.active { display: block; }
+
+.rule { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; font-size: .83rem;
+        border-bottom: 1px dashed var(--line); }
+.rule:last-child { border-bottom: 0; }
+.rule .rid { font-family: var(--mono); font-size: .78rem; font-weight: 500; }
+
+/* audit */
+.audit-row { display: grid; grid-template-columns: 148px 1fr; gap: 11px; padding: 7px 0;
+             border-bottom: 1px solid var(--line); font-size: .82rem; align-items: baseline; }
+.audit-row .ts { font-family: var(--mono); font-size: .76rem; color: var(--ink-4); }
+.chain-ok { color: var(--green); font-weight: 600; }
+
+table.data { width: 100%; border-collapse: collapse; font-size: .82rem; }
+table.data th { text-align: left; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+                color: var(--ink-4); padding: 7px 9px; border-bottom: 1px solid var(--line-2); font-weight: 620; }
+table.data td { padding: 7px 9px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+table.data tr:hover td { background: var(--surface-2); }
+table.data td.num { text-align: right; font-family: var(--mono); font-size: .79rem; }
+/* Headers over numeric columns were left-aligned while their cells were right-
+   aligned, so every figure sat under the wrong label. */
+table.data th.num { text-align: right; }
+
+/* ------------------------------------------------------------ diary */
+.diary-row { background: var(--surface); border: 1px solid var(--line);
+             border-radius: 12px; padding: 13px 15px; margin-bottom: 9px;
+             box-shadow: var(--shadow-sm); }
+/* Untouched for a month or more. A quiet left edge, not a red panic banner —
+   these are common and a screen of alarms stops being read. */
+.diary-row.at-risk { border-left: 3px solid var(--amber); }
+.diary-head { display: flex; justify-content: space-between; align-items: center;
+              gap: 12px; flex-wrap: wrap; }
+/* The single thing this claim needs, stated as an instruction. */
+.diary-action { font-size: .95rem; font-weight: 620; color: var(--ink);
+                margin: 7px 0 2px; }
+
+.chase-box { background: var(--indigo-50); border: 1px solid var(--indigo-500);
+             border-radius: 12px; padding: 13px 15px; margin-bottom: 11px; }
+.chase-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 9px; }
+.chase-text { width: 100%; padding: 10px 12px; border: 1px solid var(--line-2);
+              border-radius: 8px; font: inherit; font-size: .87rem; line-height: 1.5;
+              background: var(--surface); color: var(--ink); resize: vertical; }
+.chase-text:focus { outline: 2px solid var(--indigo-500); outline-offset: 1px; }
+.chase-foot { display: flex; justify-content: space-between; align-items: center;
+              gap: 12px; margin-top: 9px; flex-wrap: wrap; }
+
+/* ------------------------------------------------------- consistency */
+.pill.bad { background: var(--red-bg); color: var(--red); }
+.pill-btn { border: 0; cursor: pointer; font: inherit; font-size: 12px;
+            font-weight: 600; }
+.pill-btn:hover { filter: brightness(.95); }
+
+.consist-box { background: var(--surface); border: 1px solid var(--line-2);
+               border-radius: 12px; padding: 13px 15px; margin-bottom: 11px;
+               box-shadow: var(--shadow); }
+.finding { border-left: 3px solid var(--amber); background: var(--surface-2);
+           border-radius: 0 8px 8px 0; padding: 9px 12px; margin-bottom: 7px; }
+.finding.serious { border-left-color: var(--red); }
+.finding-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.finding-sev { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em;
+               font-weight: 700; color: var(--amber); }
+.finding.serious .finding-sev { color: var(--red); }
+.finding-detail { font-size: .8rem; color: var(--ink-2); line-height: 1.45;
+                  margin-top: 3px; }
+
+/* The model's read, visually separated from the computed findings above it so
+   nobody mistakes an interpretation for a fact. */
+.consist-read { background: var(--indigo-50); border: 1px dashed var(--indigo-500);
+                border-radius: 8px; padding: 10px 12px; margin-top: 9px;
+                font-size: .82rem; color: var(--ink-2); line-height: 1.5; }
+.consist-read-label { font-size: .68rem; text-transform: uppercase;
+                      letter-spacing: .04em; font-weight: 700;
+                      color: var(--indigo-600); margin-bottom: 4px; }
+
+/* ------------------------------------------------------------ FNOL triage */
+.intake-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 1080px) { .intake-layout { grid-template-columns: 1fr; } }
+
+.fnol-row { padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.fnol-row:hover { background: var(--surface-2); }
+.fnol-row.active { background: var(--indigo-50); box-shadow: inset 3px 0 0 var(--indigo-600); }
+.fnol-row .ref { font-family: var(--mono); font-size: .78rem; font-weight: 600; color: var(--ink); }
+.fnol-row .meta { font-size: .74rem; color: var(--ink-3); margin-top: 2px; }
+
+.detail-grid {
+  display: grid; grid-template-columns: minmax(130px, auto) 1fr; gap: 6px 14px;
+  font-size: .85rem;
+}
+.detail-grid dt { color: var(--ink-3); }
+.detail-grid dd { margin: 0; font-weight: 550; }
+
+/* the bot */
+.rpa-shell { display: grid; grid-template-columns: 268px minmax(0, 1fr); gap: 12px; }
+@media (max-width: 1180px) { .rpa-shell { grid-template-columns: 1fr; } }
+
+.rpa-steps { max-height: 480px; overflow-y: auto; }
+.rpa-step {
+  display: flex; gap: 9px; padding: 7px 4px; font-size: .81rem;
+  border-bottom: 1px dashed var(--line); align-items: flex-start;
+}
+.rpa-step:last-child { border-bottom: 0; }
+.rpa-step .ico { flex-shrink: 0; width: 15px; text-align: center; }
+.rpa-step .lbl { font-weight: 560; color: var(--ink-2); }
+.rpa-step .det {
+  font-family: var(--mono); font-size: .73rem; color: var(--ink-4);
+  word-break: break-word; margin-top: 1px;
+}
+.rpa-step.error .lbl { color: var(--red); }
+.rpa-step.warn .lbl { color: var(--amber); }
+
+/* The bot's browser. Chrome around the screenshot so it reads as a real window
+   being driven, not a picture pasted into the page. */
+.browser-frame {
+  border: 1px solid var(--line-2); border-radius: var(--r); overflow: hidden;
+  background: var(--surface-3); box-shadow: var(--shadow);
+}
+.browser-bar {
+  display: flex; align-items: center; gap: 8px; padding: 7px 11px;
+  background: linear-gradient(180deg, #f6f6f7, #e9e9ec); border-bottom: 1px solid var(--line-2);
+}
+.browser-dots { display: flex; gap: 5px; }
+.browser-dots i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+.browser-url {
+  flex: 1; background: #fff; border: 1px solid var(--line-2); border-radius: 11px;
+  padding: 2px 11px; font-size: .73rem; color: var(--ink-3); font-family: var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.browser-live {
+  font-size: .68rem; font-weight: 700; letter-spacing: .06em; color: #fff;
+  background: var(--red); padding: 2px 7px; border-radius: 3px;
+}
+.browser-live.done { background: var(--green); }
+.browser-viewport { position: relative; background: #d4d0c8; min-height: 320px; }
+.browser-viewport img { width: 100%; display: block; }
+.browser-caption {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  background: rgba(11, 23, 41, .82); color: #fff; padding: 5px 11px; font-size: .76rem;
+}
+.browser-empty {
+  display: grid; place-items: center; min-height: 320px; color: var(--ink-4); font-size: .85rem;
+}
+.frame-strip { display: flex; gap: 6px; overflow-x: auto; padding: 8px 2px 2px; }
+.frame-thumb {
+  flex-shrink: 0; width: 84px; border: 2px solid transparent; border-radius: 4px;
+  cursor: pointer; overflow: hidden; background: #fff;
+}
+.frame-thumb img { width: 100%; display: block; }
+.frame-thumb.active { border-color: var(--indigo-600); }
+</style>
+</head>
+<body>
+<div id="header-slot"></div>
+
+<nav class="tabbar">
+  <button class="tab active" data-panel="diary">Today <span class="count" id="c-diary">·</span></button>
+  <button class="tab" data-panel="queue">Documents <span class="count" id="c-queue">·</span></button>
+  <button class="tab" data-panel="intake">New claims <span class="count" id="c-intake">·</span></button>
+  <button class="tab" data-panel="book">Claims <span class="count" id="c-book">·</span></button>
+  <button class="tab" data-panel="cases">Cases <span class="count" id="c-cases">·</span></button>
+  <button class="tab" data-panel="assess">Assessment <span class="count" id="c-assess">·</span></button>
+
+  <!-- Cost, savings, AI quality and the audit trail are manager-only
+       oversight rather than claim work, so they have their own page. -->
+  <a class="tab tab-link" href="/oversight" id="oversight-link">Oversight →</a>
+</nav>
+
+<div class="container-wide">
+  <section class="panel active" id="panel-diary"><div id="diary-body"></div></section>
+  <section class="panel" id="panel-queue"><div id="queue-body"></div></section>
+  <section class="panel" id="panel-intake"><div id="intake-body"></div></section>
+  <section class="panel" id="panel-book"><div id="book-body"></div></section>
+  <section class="panel" id="panel-cases"><div id="cases-body"></div></section>
+  <section class="panel" id="panel-assess"><div id="assess-body"></div></section>
+</div>
+
+<script type="module">
+import { api, annotatedImage, hasAnnotations, session, esc, md, money, pct, humanise, titleCase, statusBadge, STATE_ICON,
+         requireAuth, mountHeader, wireHeader, toast, alertBox, withBusy, el } from "/static/js/api.js";
+import { confidenceMetrics, jsonBlock } from "/static/js/cards.js";
+import { mountDemoBar } from "/static/js/demo-bar.js";
+
+if (!requireAuth("agent", "manager")) throw new Error("redirecting");
+const isManager = session.role === "manager";
+document.getElementById("header-slot").innerHTML = mountHeader("Staff console");
+wireHeader();
+
+// Same controls as the portal. Staff also get the "everything" scope, which is
+// what you want between demo runs.
+mountDemoBar(document.getElementById("demo-slot"), {
+  // A reset can delete the very rows this page is showing — a claims reset
+  // rebuilds the dataset entirely — so drop every cached view and the ids that
+  // came with them, or the next click fetches a document that no longer exists.
+  onReset: () => {
+    Object.keys(loaded).forEach(k => delete loaded[k]);
+    fnolList = []; activeFnolId = null;
+    cases = []; activeCaseId = null;
+    clearTimeout(rpaPoll);
+    document.querySelectorAll(".panel").forEach(panel => {
+      if (!panel.classList.contains("active")) panel.firstElementChild.innerHTML = "";
+    });
+    loaded.queue = true;
+    loadQueue();
+  },
+});
+
+const SHIELD = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+  <path d="M12 1.6 3.6 5v6.4c0 5.2 3.6 10 8.4 11.2 4.8-1.2 8.4-6 8.4-11.2V5L12 1.6Z"/></svg>`;
+
+// Oversight is manager-only; agents should not see a link that bounces them.
+if (!isManager) document.getElementById("oversight-link")?.remove();
+
+const loaded = {};
+document.querySelectorAll(".tab[data-panel]").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t === tab));
+    document.querySelectorAll(".panel").forEach(p =>
+      p.classList.toggle("active", p.id === `panel-${tab.dataset.panel}`));
+    const view = tab.dataset.panel;
+    if (!loaded[view]) { loaded[view] = true; VIEWS[view](); }
+  });
+});
+
+// ============================================================ review queue
+async function loadQueue() {
+  const host = document.getElementById("queue-body");
+  host.innerHTML = '<div class="skel" style="width:40%"></div>';
+  const data = await api("GET", "/staff/review-queue");
+  const documents = data.documents || [];
+  const signals = data.fraud_signals || [];
+  document.getElementById("c-queue").textContent = documents.length;
+
+  host.innerHTML = `<div class="row-between" style="margin-bottom:12px;">
+      <div>
+        <h2>${documents.length} document(s) awaiting sign-off</h2>
+        <div class="tiny">Confirming a document is valid evidence. This does not
+          decide the claim — that happens under <b>Assessment</b>.</div>
+      </div>
+      <div class="row">
+        <span class="muted">${signals.length} fraud signal(s)</span>
+      </div></div>
+    <div id="queue-docs"></div>
+    ${signals.length ? `<h3 style="margin:20px 0 9px;">Fraud signals</h3>
+      <p class="muted" style="font-size:.83rem;">Explainable indicators only, never decisions.</p>
+      ${signals.map(s => alertBox("warn",
+        `<b>${esc(s.signal_type)}</b> on ${esc(s.claim_number)} (severity ${esc(s.severity)}) — ${esc(s.explanation)}`)).join("")}` : ""}`;
+
+  const docsHost = document.getElementById("queue-docs");
+  if (!documents.length) {
+    docsHost.innerHTML = `<div class="empty"><div class="big">✅</div>Nothing waiting. The queue is clear.</div>`;
+    return;
+  }
+
+  // Grouped by claim: a handler works one customer's file at a time and can see
+  // when accepting the last outstanding document completes it.
+  const byClaim = new Map();
+  for (const doc of documents) {
+    if (!byClaim.has(doc.claim_number)) {
+      byClaim.set(doc.claim_number, { customer: doc.customer_name, docs: [] });
+    }
+    byClaim.get(doc.claim_number).docs.push(doc);
+  }
+
+  for (const [claimNumber, group] of byClaim) {
+    const section = el("div", { class: "claim-group" });
+    section.innerHTML = `<div class="claim-group-head">
+        <b>${esc(claimNumber)}</b>
+        <span class="tiny"> · ${esc(group.customer)}</span>
+        <span class="tiny group-count">${group.docs.length} awaiting you</span>
+      </div>`;
+
+    group.docs.forEach(document_ => {
+      const node = el("details", { class: "disclose" });
+      const rec = (document_.rejection_payload || {}).recommendation;
+      const [recCls, recLabel] = rec === "ACCEPT" ? ["b-green", "Checks passed"]
+        : rec === "REJECT" ? ["b-red", "Checks failed"]
+        : ["b-amber", "Needs a human eye"];
+      node.innerHTML = `
+        <summary>${esc(humanise(document_.doc_type || "unclassified"))}
+          <span class="badge ${recCls}">${recLabel}</span></summary>
+        <div class="body">
+          ${confidenceMetrics(document_)}
+          <h4 style="margin:13px 0 6px;">What the AI read</h4>
+          ${jsonBlock(document_.extracted_fields)}
+          ${document_.rejection_payload ? `<div style="margin-top:11px;">
+            ${alertBox(rec === "ACCEPT" ? "ok" : "warn",
+              `<b>AI assessment:</b> ${esc(document_.rejection_payload.headline || "")}`)}
+            <div class="annot-slot"></div></div>` : ""}
+          <label class="field" style="margin-top:12px;"><span>Reviewer note (the customer sees this)</span>
+            <input type="text" class="note"></label>
+          <div class="btn-row">
+            <button class="btn btn-ok act-accept">✅ Accept as evidence</button>
+            <button class="btn btn-danger act-reject">❌ Reject document</button>
+          </div>
+        </div>`;
+
+      if (hasAnnotations(document_)) {
+        annotatedImage(document_.id).then(blob => {
+          if (!blob) return;
+          const img = el("img", { class: "annot-img", src: URL.createObjectURL(blob), alt: "Annotated document" });
+          node.querySelector(".annot-slot")?.append(img);
+        });
+      }
+
+      const decide = async (verdict, button) => {
+        await withBusy(button, async () => {
+          try {
+            await api("POST", `/staff/documents/${document_.id}/decision`,
+              { json: { verdict, note: node.querySelector(".note").value } });
+            toast(verdict === "VERIFIED" ? "Accepted as evidence." : "Document rejected.", "ok");
+            loadQueue();
+          } catch (error) { toast(error.message, "err"); }
+        });
+      };
+      node.querySelector(".act-accept").addEventListener("click", e => decide("VERIFIED", e.currentTarget));
+      node.querySelector(".act-reject").addEventListener("click", e => decide("REJECTED_RULES", e.currentTarget));
+      section.append(node);
+    });
+
+    docsHost.append(section);
+  }
+}
+
+// ============================================================ case workspace
+let cases = [];
+let activeCaseId = null;
+
+async function loadCases() {
+  const host = document.getElementById("cases-body");
+  host.innerHTML = '<div class="skel" style="width:44%"></div>';
+  const data = await api("GET", "/staff/escalations");
+  cases = data.tickets || [];
+  document.getElementById("c-cases").textContent = cases.length;
+
+  if (!cases.length) {
+    host.innerHTML = `<div class="empty"><div class="big">🎉</div>No open cases.</div>`;
+    return;
+  }
+
+  host.innerHTML = `<div class="case-layout">
+    <div class="panel-box"><header>Open cases · ${cases.length}</header>
+      <div class="case-list" id="case-list"></div></div>
+    <div id="case-main"><div class="empty">Select a case to begin.</div></div>
+    <div id="case-tools" class="case-tools"></div>
+  </div>`;
+
+  const list = document.getElementById("case-list");
+  cases.forEach(ticket => {
+    const row = el("div", { class: "case-row", "data-id": ticket.id });
+    row.innerHTML = `<span class="who">${esc(ticket.customer_name)}</span>
+      <span class="meta">${esc(ticket.claim_number || "no claim")} · ${esc(ticket.status)}${
+        ticket.assigned_to ? ` · ${esc(ticket.assigned_to)}` : " · unassigned"}</span>`;
+    row.addEventListener("click", () => openCase(ticket.id));
+    list.append(row);
+  });
+
+  openCase(activeCaseId && cases.some(t => t.id === activeCaseId) ? activeCaseId : cases[0].id);
+}
+
+async function openCase(ticketId) {
+  activeCaseId = ticketId;
+  document.querySelectorAll(".case-row").forEach(r => r.classList.toggle("active", r.dataset.id === ticketId));
+  const main = document.getElementById("case-main");
+  const tools = document.getElementById("case-tools");
+  main.innerHTML = '<div class="skel" style="width:56%"></div><div class="skel" style="width:38%"></div>';
+  tools.innerHTML = "";
+
+  const ticket = cases.find(t => t.id === ticketId);
+  const caseData = await api("GET", `/staff/escalations/${ticketId}/case`);
+  const packet = (caseData.ticket || {}).context_packet || {};
+  const claim = caseData.claim;
+  const followUps = packet.follow_ups || [];
+  const mood = packet.customer_sentiment || "—";
+  const initial = packet.initial_sentiment;
+  const assignedTo = (caseData.ticket || {}).assigned_to;
+
+  // More than one open case for the same person is almost always a duplicate.
+  const sameCustomer = cases.filter(t => t.customer_name === ticket.customer_name);
+
+  main.innerHTML = `
+    <div class="panel-box" style="margin-bottom:14px;"><div class="inner">
+      <div class="metrics">
+        <div class="metric"><div class="label">Mood now</div><div class="value">${esc(mood)}</div>
+          ${initial && initial !== mood ? `<div class="delta">was ${esc(initial)}</div>` : ""}</div>
+        <div class="metric"><div class="label">Times chased</div><div class="value">${followUps.length}</div></div>
+        <div class="metric"><div class="label">Assigned</div><div class="value" style="font-size:.92rem;">${esc(assignedTo || "unassigned")}</div></div>
+      </div>
+      ${sameCustomer.length > 1 ? alertBox("warn",
+        `${esc(ticket.customer_name)} has ${sameCustomer.length} open cases. A case belongs to the customer,
+         so these are probably duplicates — close the extras and work the oldest.
+         <div style="margin-top:8px;"><button class="btn btn-sm" id="dup-close">Close this one as a duplicate</button></div>`) : ""}
+      ${(mood === "frustrated" || mood === "distressed" || followUps.length >= 2) ? alertBox("warn",
+        `This customer is <b>${esc(mood)}</b> and has chased ${followUps.length} time(s).
+         Read their latest message before replying.`) : ""}
+      <div style="margin-top:11px;"><span class="tiny">Why it was raised</span>
+        <div style="font-size:.87rem;">${esc((caseData.ticket || {}).reason || "")}</div></div>
+      ${followUps.length ? `<details class="disclose" style="margin-top:10px;">
+        <summary>They've chased ${followUps.length} time(s) — what they said</summary><div class="body">
+        ${followUps.slice().reverse().map(f =>
+          `<div style="margin-bottom:7px;"><span class="mono tiny">${esc((f.at || "").slice(11, 16))}</span>
+           <span class="tiny">· ${esc(f.sentiment)}</span><div style="font-size:.85rem;">“${esc(f.message)}”</div></div>`).join("")}
+        </div></details>` : ""}
+      ${alertBox("info", `<b>What ClaimCompanion passed on:</b> ${esc(packet.conversation_summary || "—")}`)}
+      ${!assignedTo ? `<button class="btn btn-primary" id="take-case">📥 Take this case</button>
+        <div class="tiny" style="margin-top:6px;">Taking the case tells the customer, in the assistant's voice,
+        that you're on it — and shows them what was passed to you.</div>` : ""}
+    </div></div>
+
+    <div class="panel-box" style="margin-bottom:14px;">
+      <header>Conversation history</header>
+      <div class="inner"><div class="tiny" style="margin-bottom:9px;" id="convo-note"></div>
+        <div class="transcript" id="transcript"></div></div>
+    </div>
+
+    <div class="panel-box" style="margin-bottom:14px;">
+      <header>Ask ClaimCompanion about this case</header>
+      <div class="inner">
+        <div class="tiny" style="margin-bottom:9px;">Grounded in the case file only — it surfaces evidence,
+          it doesn't decide. Answers here are never sent to the customer.</div>
+        <div class="btn-row" style="margin-bottom:9px;" id="copilot-quick"></div>
+        <div class="row"><input type="text" id="copilot-q" class="grow" placeholder="Or ask your own…">
+          <button class="btn" id="copilot-go">Ask</button></div>
+        <div id="copilot-answer"></div>
+      </div>
+    </div>
+
+    <div class="panel-box">
+      <header>Message the customer</header>
+      <div class="inner">
+        <div class="mode-switch">
+          <button class="mode on" data-mode="answer">
+            <b>Answer them</b><span class="tiny">Tell them something — a decision, a finding, an update</span>
+          </button>
+          <button class="mode" data-mode="ask">
+            <b>Ask for something</b><span class="tiny">Request a document or a detail you need from them</span>
+          </button>
+        </div>
+
+        <textarea id="note" rows="4"></textarea>
+        <div class="tiny" id="mode-help" style="margin-top:7px;"></div>
+
+        <label class="check" id="verbatim-row" style="margin:10px 0;">
+          <input type="checkbox" id="verbatim">
+          Send my exact words (recommended for any decision)</label>
+
+        <div class="btn-row">
+          <button class="btn btn-primary" id="send-reply" disabled>📤 Send to customer</button>
+          <button class="btn" id="send-resolve" disabled>✅ Send &amp; close case</button>
+        </div>
+        <div id="reply-result"></div>
+      </div>
+    </div>`;
+
+  renderTranscript(caseData);
+  renderTools(tools, caseData, claim, ticketId);
+
+  document.getElementById("dup-close")?.addEventListener("click", async event => {
+    await withBusy(event.currentTarget, async () => {
+      await api("POST", `/staff/escalations/${ticketId}/close-duplicate`);
+      toast("Closed as a duplicate — the customer wasn't notified.", "ok");
+      activeCaseId = null;
+      loadCases();
+    });
+  });
+
+  document.getElementById("take-case")?.addEventListener("click", async event => {
+    await withBusy(event.currentTarget, async () => {
+      try {
+        await api("POST", `/staff/escalations/${ticketId}/claim`);
+      } catch (error) {
+        // Almost always a stale tab: someone took it while this was open.
+        toast(error.message, "err");
+      }
+      openCase(ticketId);
+    });
+  });
+
+  // ---- copilot
+  const prompts = ["What has this customer already been told?", "What's actually blocking this claim?",
+                   "Why was the document rejected — is the rule right?", "Draft a reply I can edit."];
+  const quick = document.getElementById("copilot-quick");
+  prompts.forEach(prompt => quick.append(
+    el("button", { class: "btn btn-sm", onclick: e => askCopilot(prompt, e.currentTarget) }, prompt)));
+  document.getElementById("copilot-go").addEventListener("click", event => {
+    const question = document.getElementById("copilot-q").value.trim();
+    if (question) askCopilot(question, event.currentTarget);
+  });
+
+  async function askCopilot(question, button) {
+    const host = document.getElementById("copilot-answer");
+    host.innerHTML = '<div class="row" style="margin-top:10px;"><span class="spinner"></span> <span class="tiny">Reading the case file…</span></div>';
+    await withBusy(button, async () => {
+      try {
+        const answer = await api("POST", `/staff/escalations/${ticketId}/assist`, { json: { question } });
+        host.innerHTML = alertBox("info", md(answer.answer));
+        const use = el("button", { class: "btn btn-sm" }, "Use this as my reply");
+        use.addEventListener("click", () => {
+          document.getElementById("note").value = answer.answer;
+          document.getElementById("note").dispatchEvent(new Event("input"));
+        });
+        host.append(use);
+      } catch (error) { host.innerHTML = alertBox("error", esc(error.message)); }
+    });
+  }
+
+  // ---- reply
+  const note = document.getElementById("note");
+  const sendBtn = document.getElementById("send-reply");
+  const resolveBtn = document.getElementById("send-resolve");
+  let mode = "answer";
+
+  // The two modes send to different endpoints and behave differently, so the
+  // box says which one you are in rather than leaving it to be inferred.
+  const MODES = {
+    answer: {
+      placeholder: "e.g. I've checked the invoice against the garage's records and it's genuine — the date was a typing error. I've accepted it.",
+      help: "Delivered in the assistant's voice. It may only re-word what you wrote — any fact it adds that isn't in your note is discarded and you get quoted verbatim instead.",
+      button: "📤 Send to customer",
+      verbatim: true,
+    },
+    ask: {
+      placeholder: "e.g. police report + confirmation the car was taxed on the incident date",
+      help: "Shorthand is fine. The assistant turns it into a request they can act on — what you need, why, and how to get it.",
+      button: "📨 Ask the customer",
+      verbatim: false,
+    },
+  };
+
+  function applyMode(next) {
+    mode = next;
+    const spec = MODES[next];
+    note.placeholder = spec.placeholder;
+    document.getElementById("mode-help").textContent = spec.help;
+    sendBtn.textContent = spec.button;
+    // Verbatim only means something when relaying a statement of fact; a
+    // request is generated from shorthand and has nothing to quote.
+    document.getElementById("verbatim-row").classList.toggle("hidden", !spec.verbatim);
+    // Closing a case on a question you just asked would be wrong.
+    resolveBtn.classList.toggle("hidden", next === "ask");
+    document.querySelectorAll(".mode").forEach(b =>
+      b.classList.toggle("on", b.dataset.mode === next));
+  }
+  document.querySelectorAll(".mode").forEach(button =>
+    button.addEventListener("click", () => applyMode(button.dataset.mode)));
+  applyMode("answer");
+
+  note.addEventListener("input", () => {
+    const empty = !note.value.trim();
+    sendBtn.disabled = empty; resolveBtn.disabled = empty;
+  });
+
+  sendBtn.addEventListener("click", async event => {
+    await withBusy(event.currentTarget, async () => {
+      try {
+        let result, warn = "";
+        if (mode === "ask") {
+          result = await api("POST", `/staff/escalations/${ticketId}/request-info`,
+            { json: { request: note.value } });
+        } else {
+          const verbatim = document.getElementById("verbatim").checked;
+          result = await api("POST", `/staff/escalations/${ticketId}/reply`,
+            { json: { note: note.value, force_verbatim: verbatim } });
+          if (result.verbatim && !verbatim) {
+            warn = alertBox("warn", "The assistant's wording couldn't be verified "
+              + "against your note, so you were quoted verbatim.");
+          }
+        }
+        document.getElementById("reply-result").innerHTML = warn + alertBox("ok",
+          `<b>${mode === "ask" ? "Asked" : "Delivered"}.</b> What the customer sees:`
+          + `<br><br>${md(result.content)}`);
+        note.value = ""; sendBtn.disabled = true; resolveBtn.disabled = true;
+        openCase(ticketId);
+      } catch (error) { toast(error.message, "err"); }
+    });
+  });
+
+  resolveBtn.addEventListener("click", async event => {
+    await withBusy(event.currentTarget, async () => {
+      await api("POST", `/staff/escalations/${ticketId}/resolve`, { json: { closing_note: note.value } });
+      toast("Case closed and the customer told.", "ok");
+      activeCaseId = null;
+      loadCases();
+    });
+  });
+}
+
+function renderTranscript(caseData) {
+  const conversations = caseData.conversations || [];
+  const total = conversations.reduce((sum, c) => sum + (c.message_count || 0), 0);
+  document.getElementById("convo-note").textContent =
+    `${conversations.length} conversation(s), ${total} messages — the customer's full history, not just the chat that raised this.`;
+
+  const host = document.getElementById("transcript");
+  host.innerHTML = "";
+  for (const conversation of conversations.slice().reverse()) {  // oldest first
+    const tags = [];
+    if (conversation.is_origin) tags.push("raised this case");
+    if (conversation.is_active) tags.push("your reply goes here");
+    host.append(el("div", { class: "t-sep" },
+      (conversation.started_at || "").slice(0, 16).replace("T", " ") + (tags.length ? ` · ${tags.join(" · ")}` : "")));
+
+    if (!conversation.messages.length) { host.append(el("div", { class: "tiny" }, "(empty)")); continue; }
+    for (const message of conversation.messages) {
+      if (message.role === "system") {
+        host.append(el("div", { class: "tiny", style: "text-align:center;margin:7px 0;" }, `— ${message.content} —`));
+        continue;
+      }
+      const speaker = message.role === "user" ? "Customer"
+        : message.author_name ? `ClaimCompanion (from ${message.author_name})` : "ClaimCompanion";
+      const node = el("div", { class: `t-msg ${message.role === "user" ? "user" : ""}` });
+      node.innerHTML = `<div class="t-head">${message.role === "user" ? "🧑" : SHIELD}
+          <b>${esc(speaker)}</b><span class="mono">${esc((message.created_at || "").slice(11, 16))}</span></div>
+        <div class="t-body">${md(message.content)}</div>`;
+      host.append(node);
+    }
+  }
+  host.scrollTop = host.scrollHeight;
+}
+
+function renderTools(host, caseData, claim, ticketId) {
+  host.innerHTML = `
+    <div class="panel-box" style="margin-bottom:14px;"><header>Claim</header><div class="inner" id="tool-claim"></div></div>
+    ${caseData.checklist ? `<div class="panel-box" style="margin-bottom:14px;"><header>Checklist</header>
+      <div class="inner" id="tool-checklist"></div></div>` : ""}
+    ${(caseData.fraud_signals || []).length ? `<div class="panel-box" style="margin-bottom:14px;">
+      <header>Signals</header><div class="inner" id="tool-signals"></div></div>` : ""}
+    <div class="panel-box" style="margin-bottom:14px;"><header>Documents &amp; verification</header>
+      <div class="inner"><div class="tiny" style="margin-bottom:9px;">Everything the verdict was made from —
+        you're overruling a machine, so you get to see exactly what it saw.</div>
+        <div id="tool-docs"></div></div></div>
+    `;
+
+  const claimHost = document.getElementById("tool-claim");
+  if (claim) {
+    const prediction = claim.prediction || {};
+    claimHost.innerHTML = `<div class="row-between" style="margin-bottom:9px;">
+        <b>${esc(claim.claim_number)}</b>${statusBadge(claim.status)}</div>
+      <div class="tiny">${esc(titleCase(claim.claim_type))} · Policy ${esc(claim.policy_number || "—")}
+        · Incident ${esc(claim.incident_date || "—")}</div>
+      <div class="metrics" style="margin-top:10px;">
+        <div class="metric"><div class="label">Claimed</div><div class="value">${money(claim.claimed_amount)}</div></div>
+        <div class="metric"><div class="label">Approved</div><div class="value">${money(claim.approved_amount)}</div></div>
+      </div>
+      ${prediction.predicted_settlement_date ? `<div class="tiny" style="margin-top:8px;">
+        Predicted completion ${esc(prediction.predicted_settlement_date)}
+        (±${esc(prediction.band_days || 0)}d, ${pct(prediction.confidence)} confidence)</div>` : ""}`;
+  } else {
+    claimHost.innerHTML = `<div class="tiny">No claim attached to this case.</div>`;
+  }
+
+  const checklistHost = document.getElementById("tool-checklist");
+  if (checklistHost) {
+    checklistHost.innerHTML = ((caseData.checklist || {}).items || []).map(item =>
+      `<div class="row" style="padding:4px 0;"><span>${STATE_ICON[item.state] || "⬜"}</span>
+        <span class="grow">${esc(titleCase(item.doc_type))}</span>
+        <span class="mono tiny">${esc(item.state)}</span></div>`).join("");
+  }
+
+  const signalsHost = document.getElementById("tool-signals");
+  if (signalsHost) {
+    signalsHost.innerHTML = (caseData.fraud_signals || []).map(signal => alertBox("warn",
+      `<b>${esc(signal.signal_type)}</b> (severity ${esc(signal.severity)}) — ${esc(signal.explanation)}`)).join("");
+  }
+
+  const docsHost = document.getElementById("tool-docs");
+  (caseData.documents || []).forEach(document_ => {
+    const icon = document_.status === "VERIFIED" ? "✅" : document_.status === "NEEDS_REVIEW" ? "🔍" : "⚠️";
+    const node = el("details", { class: "disclose" });
+    node.innerHTML = `
+      <summary>${icon} ${esc(document_.doc_type || "unclassified")} · <span class="mono">${esc(document_.status)}</span></summary>
+      <div class="body">
+        ${confidenceMetrics(document_, true)}
+        <div class="subtabs" style="margin-top:12px;">
+          <button class="subtab active" data-sub="rules">Rules</button>
+          <button class="subtab" data-sub="read">What we read</button>
+          <button class="subtab" data-sub="text">The document</button>
+          <button class="subtab" data-sub="annot">Annotated</button>
+        </div>
+        <div class="subpanel active" data-sub="rules">${rulesHtml(document_)}</div>
+        <div class="subpanel" data-sub="read">${jsonBlock(document_.extracted_fields)}
+          <div class="tiny" style="margin-top:7px;">Values the model reported that don't appear in the
+            document text are dropped before rules run.</div></div>
+        <div class="subpanel" data-sub="text">${document_.content
+          ? `<pre class="doc-text">${esc(document_.content)}</pre>`
+          : `<div class="tiny">Not text-readable — see the Annotated tab.</div>`}</div>
+        <div class="subpanel" data-sub="annot"><div class="annot-slot tiny">Loading…</div></div>
+        <label class="field" style="margin-top:12px;"><span>Reviewer note (the customer sees this)</span>
+          <input type="text" class="cnote"></label>
+        <div class="btn-row"><button class="btn btn-ok c-acc">✅ Accept as evidence</button>
+          <button class="btn btn-danger c-rej">❌ Reject document</button></div>
+      </div>`;
+
+    node.querySelectorAll(".subtab").forEach(subtab => {
+      subtab.addEventListener("click", () => {
+        node.querySelectorAll(".subtab").forEach(s => s.classList.toggle("active", s === subtab));
+        node.querySelectorAll(".subpanel").forEach(p =>
+          p.classList.toggle("active", p.dataset.sub === subtab.dataset.sub));
+        if (subtab.dataset.sub === "annot") loadAnnotation(node, document_.id, hasAnnotations(document_));
+      });
+    });
+
+    const decide = async (verdict, button) => {
+      await withBusy(button, async () => {
+        await api("POST", `/staff/documents/${document_.id}/decision`,
+          { json: { verdict, note: node.querySelector(".cnote").value } });
+        toast(verdict === "VERIFIED" ? "Accepted as evidence." : "Document rejected.", "ok");
+        openCase(ticketId);
+      });
+    };
+    node.querySelector(".c-acc").addEventListener("click", e => decide("VERIFIED", e.currentTarget));
+    node.querySelector(".c-rej").addEventListener("click", e => decide("REJECTED_RULES", e.currentTarget));
+    docsHost.append(node);
+  });
+
+}
+
+function rulesHtml(document_) {
+  const validations = document_.validations || [];
+  let html = validations.length ? validations.map(rule => `
+    <div class="rule"><span>${rule.passed ? "✅" : "❌"}</span>
+      <div class="grow"><span class="rid">${esc(rule.rule_id)}</span>
+        <div class="tiny">${esc(rule.message || "")}</div>
+        ${!rule.passed && rule.details ? jsonBlock(rule.details) : ""}</div></div>`).join("")
+    : `<div class="tiny">No rules have run on this document yet.</div>`;
+
+  if (document_.rejection_payload) {
+    const payload = document_.rejection_payload;
+    html += `<hr class="divider">${alertBox("error",
+      `<b>Verdict: ${esc(payload.reason_code || "")}</b> — ${esc(payload.headline || "")}`)}
+      <div class="tiny">What the customer was told: ${esc(payload.plain_explanation || "")}</div>`;
+  }
+  return html;
+}
+
+function loadAnnotation(node, docId, annotated) {
+  const slot = node.querySelector('.subpanel[data-sub="annot"] .annot-slot');
+  if (!slot || slot.dataset.loaded) return;
+  slot.dataset.loaded = "1";
+  if (!annotated) {
+    slot.textContent = "No annotations — nothing was flagged on the page.";
+    return;
+  }
+  annotatedImage(docId).then(blob => {
+    if (blob) {
+      slot.replaceChildren(el("img", { class: "annot-img", src: URL.createObjectURL(blob), alt: "Annotated document" }));
+    } else {
+      slot.textContent = "No annotations — nothing was flagged on the page.";
+    }
+  });
+}
+
+// ============================================================ FNOL triage
+let fnolList = [];
+let activeFnolId = null;
+let rpaPoll = null;
+
+const FNOL_BADGE = {
+  SUBMITTED: ["b-blue", "New"],
+  UNDER_REVIEW: ["b-blue", "Being checked"],
+  INFO_REQUIRED: ["b-amber", "Waiting on customer"],
+  READY_TO_REGISTER: ["b-green", "Ready to register"],
+  REGISTERING: ["b-blue", "Registering…"],
+  REGISTERED: ["b-green", "Registered"],
+  REJECTED: ["b-red", "Rejected"],
+};
+
+async function loadIntake() {
+  const host = document.getElementById("intake-body");
+  host.innerHTML = '<div class="skel" style="width:44%"></div>';
+  const data = await api("GET", "/staff/fnol");
+  fnolList = data.requests || [];
+  document.getElementById("c-intake").textContent = fnolList.length;
+
+  if (!fnolList.length) {
+    host.innerHTML = `<div class="empty"><div class="big">📥</div>
+      No new claim notifications waiting.</div>`;
+    return;
+  }
+
+  host.innerHTML = `<div class="intake-layout">
+    <div class="panel-box"><header>Notifications · ${fnolList.length}</header>
+      <div class="case-list" id="fnol-list"></div></div>
+    <div id="fnol-detail"><div class="empty">Select a notification.</div></div>
+  </div>`;
+
+  const list = document.getElementById("fnol-list");
+  fnolList.forEach(record => {
+    const [cls, label] = FNOL_BADGE[record.status] || ["b-slate", record.status];
+    const row = el("div", { class: "fnol-row", "data-id": record.id });
+    row.innerHTML = `<div class="row-between"><span class="ref">${esc(record.reference)}</span>
+        <span class="badge ${cls}">${esc(label)}</span></div>
+      <div class="meta">${esc(record.customer_name)} · ${esc(titleCase(record.claim_type || "—"))}
+        · ${record.doc_count} doc(s)</div>`;
+    row.addEventListener("click", () => openFnol(record.id));
+    list.append(row);
+  });
+
+  openFnol(activeFnolId && fnolList.some(r => r.id === activeFnolId)
+    ? activeFnolId : fnolList[0].id);
+}
+
+async function openFnol(fnolId) {
+  activeFnolId = fnolId;
+  clearTimeout(rpaPoll);
+  document.querySelectorAll(".fnol-row")
+          .forEach(r => r.classList.toggle("active", r.dataset.id === fnolId));
+
+  const host = document.getElementById("fnol-detail");
+  host.innerHTML = '<div class="skel" style="width:56%"></div>';
+  const data = await api("GET", `/staff/fnol/${fnolId}`);
+  const record = data.request;
+  const [cls, label] = FNOL_BADGE[record.status] || ["b-slate", record.status];
+  const canRegister = ["SUBMITTED", "UNDER_REVIEW", "READY_TO_REGISTER"].includes(record.status);
+
+  host.innerHTML = `
+    <div class="panel-box" style="margin-bottom:14px;"><div class="inner">
+      <div class="row-between" style="margin-bottom:12px;">
+        <div><b style="font-family:var(--mono);">${esc(record.reference)}</b>
+          <span class="tiny"> · ${esc(data.customer_name)}</span></div>
+        <span class="badge ${cls}">${esc(label)}</span>
+      </div>
+      <dl class="detail-grid">
+        ${(data.items || []).map(i =>
+          `<dt>${esc(i.label)}</dt><dd>${esc(i.value)}</dd>`).join("")}
+        <dt>Policy</dt><dd>${esc((data.policy || {}).policy_number || "— none on file —")}</dd>
+      </dl>
+      ${data.missing.length ? alertBox("warn",
+        `<b>Incomplete:</b> ${data.missing.map(m => esc(humanise(m))).join(", ")}`) : ""}
+      ${record.review_note ? `<div class="tiny" style="margin-top:10px;">
+        Last note: ${esc(record.review_note)}${record.reviewer ? ` — ${esc(record.reviewer)}` : ""}</div>` : ""}
+    </div></div>
+
+    <div class="panel-box" style="margin-bottom:14px;">
+      <header>Documents supplied at intake · ${(data.documents || []).length}</header>
+      <div class="inner" id="fnol-docs"></div>
+    </div>
+
+    ${record.status !== "REGISTERED" && record.status !== "REJECTED" ? `
+    <div class="panel-box" style="margin-bottom:14px;"><header>Triage</header><div class="inner">
+      <div class="tiny" style="margin-bottom:9px;">Check the details against the policy before
+        registering. Asking for more sends the customer a message in their own thread.</div>
+      <textarea id="triage-note" rows="2" placeholder="Note — the customer sees this if you ask for more, or reject."></textarea>
+      <div class="btn-row" style="margin-top:10px;">
+        <button class="btn" id="t-review">Mark as checking</button>
+        <button class="btn" id="t-info">Ask the customer for more</button>
+        <button class="btn btn-ok" id="t-ready">Approve for registration</button>
+        <button class="btn btn-danger" id="t-reject">Reject</button>
+      </div>
+    </div></div>` : ""}
+
+    ${canRegister || record.status === "REGISTERING" || data.run ? `
+    <div class="panel-box"><header>
+        Registration bot
+        <span class="tiny" style="text-transform:none;letter-spacing:0;font-weight:400;">
+          POLARIS Claims Management System</span>
+      </header>
+      <div class="inner">
+        <div class="row-between" style="margin-bottom:12px;">
+          <div class="tiny">The bot signs in and completes the registration form the way a
+            handler would. Every keystroke is recorded below.</div>
+          ${canRegister ? `<button class="btn btn-primary" id="run-rpa">▶ Register on POLARIS</button>` : ""}
+        </div>
+        <div id="rpa-view"></div>
+      </div></div>` : ""}
+
+    ${record.claim_id ? alertBox("ok",
+      `Registered as <b>${esc((data.run?.result || {}).claim_number || "")}</b> — the customer
+       has been told, and it's now in their claims list.`) : ""}`;
+
+  // documents
+  const docsHost = document.getElementById("fnol-docs");
+  const docs = data.documents || [];
+  docsHost.innerHTML = docs.length ? "" : `<div class="tiny">Nothing attached at intake.</div>`;
+  docs.forEach(doc => {
+    const node = el("details", { class: "disclose" });
+    node.innerHTML = `<summary>📎 ${esc(doc.filename)}</summary>
+      <div class="body">${doc.content
+        ? `<pre class="doc-text">${esc(doc.content)}</pre>`
+        : `<div class="tiny">Not text-readable — it'll be run through the document
+             pipeline once the claim exists.</div>`}</div>`;
+    docsHost.append(node);
+  });
+
+  // triage buttons
+  const note = () => document.getElementById("triage-note")?.value || "";
+  const triage = async (status, button) => {
+    await withBusy(button, async () => {
+      try {
+        await api("POST", `/staff/fnol/${fnolId}/review`, { json: { status, note: note() } });
+        toast(`Marked ${status.replace(/_/g, " ").toLowerCase()}.`, "ok");
+        await loadIntake();
+      } catch (error) { toast(error.message, "err"); }
+    });
+  };
+  document.getElementById("t-review")?.addEventListener("click", e => triage("UNDER_REVIEW", e.currentTarget));
+  document.getElementById("t-info")?.addEventListener("click", e => {
+    if (!note().trim()) { toast("Say what you need — the customer sees this note.", "err"); return; }
+    triage("INFO_REQUIRED", e.currentTarget);
+  });
+  document.getElementById("t-ready")?.addEventListener("click", e => triage("READY_TO_REGISTER", e.currentTarget));
+  document.getElementById("t-reject")?.addEventListener("click", e => {
+    if (!note().trim()) { toast("A rejection needs a reason — the customer sees it.", "err"); return; }
+    triage("REJECTED", e.currentTarget);
+  });
+
+  // the bot
+  if (data.run) renderRun(data.run);
+  document.getElementById("run-rpa")?.addEventListener("click", async e => {
+    await withBusy(e.currentTarget, async () => {
+      try {
+        const started = await api("POST", `/staff/fnol/${fnolId}/register`);
+        pollRun(started.run_id);
+      } catch (error) { toast(error.message, "err"); }
+    });
+  });
+}
+
+async function pollRun(runId) {
+  const run = await api("GET", `/staff/rpa/${runId}`);
+  renderRun(run);
+  if (run.status === "RUNNING") {
+    rpaPoll = setTimeout(() => pollRun(runId), 1200);
+  } else {
+    // The claim now exists (or the run failed) — the surrounding view is stale.
+    toast(run.status === "SUCCEEDED"
+      ? `Registered as ${run.result.claim_number}. The customer has been told.`
+      : "Registration failed — see the steps.", run.status === "SUCCEEDED" ? "ok" : "err");
+    setTimeout(loadIntake, 900);
+  }
+}
+
+let activeFrame = null;
+
+function renderRun(run) {
+  const host = document.getElementById("rpa-view");
+  if (!host) return;
+
+  const running = run.status === "RUNNING";
+  const frames = run.frames || [];
+  // Follow the live edge while running; once finished, leave the reviewer on
+  // whichever frame they were inspecting.
+  if (running || activeFrame === null || activeFrame >= frames.length) {
+    activeFrame = frames.length - 1;
+  }
+  const frame = frames[activeFrame];
+
+  host.innerHTML = `
+    <div class="rpa-shell">
+      <div class="panel-box"><header>Steps</header>
+        <div class="inner rpa-steps">
+          ${(run.steps || []).map(step => `
+            <div class="rpa-step ${esc(step.state)}">
+              <span class="ico">${step.state === "error" ? "✕"
+                : step.state === "warn" ? "!" : "✓"}</span>
+              <div class="grow"><div class="lbl">${esc(step.label)}</div>
+                ${step.detail ? `<div class="det">${esc(step.detail)}</div>` : ""}</div>
+            </div>`).join("") || '<div class="tiny">Waiting to start…</div>'}
+          ${running ? '<div class="rpa-step"><span class="ico"><span class="spinner"></span></span><div class="lbl">Working…</div></div>' : ""}
+        </div>
+      </div>
+
+      <div>
+        <div class="browser-frame">
+          <div class="browser-bar">
+            <div class="browser-dots"><i style="background:#ff5f57"></i>
+              <i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+            <div class="browser-url">${esc(location.origin)}/core-system</div>
+            <span class="browser-live ${running ? "" : "done"}">${running ? "● LIVE" : "ENDED"}</span>
+          </div>
+          <div class="browser-viewport">
+            ${frame
+              ? `<img src="${esc(frame.image)}" alt="${esc(frame.label)}">
+                 <div class="browser-caption">${esc(frame.label)}</div>`
+              : `<div class="browser-empty">${running
+                    ? '<span class="spinner"></span> &nbsp;Opening the core system…'
+                    : "No screenshots captured."}</div>`}
+          </div>
+        </div>
+        ${frames.length > 1 ? `<div class="frame-strip">${frames.map((f, i) =>
+          `<div class="frame-thumb ${i === activeFrame ? "active" : ""}" data-i="${i}">
+             <img src="${esc(f.image)}" alt="${esc(f.label)}"></div>`).join("")}</div>` : ""}
+      </div>
+    </div>
+    ${run.error ? alertBox("error", esc(run.error)) : ""}`;
+
+  host.querySelectorAll(".frame-thumb").forEach(thumb => {
+    thumb.addEventListener("click", () => {
+      activeFrame = Number(thumb.dataset.i);
+      renderRun(run);
+    });
+  });
+}
+
+// ============================================================ assessment
+// Documents being accepted only means the file is complete. Somebody still has
+// to decide whether the claim is payable and for how much — that decision is
+// this tab, and it is the only place money is committed.
+let authorityLimit = 0;
+
+async function loadAssess() {
+  const host = document.getElementById("assess-body");
+  host.innerHTML = '<div class="skel" style="width:44%"></div>';
+  const data = await api("GET", "/staff/assessments");
+  const claims = data.claims || [];
+  authorityLimit = data.authority_limit || 0;
+  document.getElementById("c-assess").textContent = claims.length;
+
+  if (!claims.length) {
+    host.innerHTML = `<div class="empty"><div class="big">⚖️</div>
+      No claims waiting for a decision.</div>`;
+    return;
+  }
+
+  host.innerHTML = `<div class="row-between" style="margin-bottom:12px;">
+      <div>
+        <h2>${claims.length} claim(s) awaiting assessment</h2>
+        <div class="tiny">The paperwork is complete. This decides whether the claim
+          is payable, and for how much.</div>
+      </div>
+      <span class="tiny">Your authority: up to ${money(authorityLimit)}</span></div>
+    <div id="assess-list"></div>`;
+
+  const list = document.getElementById("assess-list");
+  claims.forEach(claim => {
+    const node = el("details", { class: "disclose" });
+    const signals = claim.fraud_signals || [];
+    node.innerHTML = `
+      <summary>${esc(claim.claim_number)} · ${esc(titleCase(claim.claim_type))}
+        · ${esc(claim.customer_name)}
+        ${signals.length ? `<span class="badge b-amber" style="margin-left:auto;">
+          ${signals.length} signal(s)</span>` : ""}</summary>
+      <div class="body">
+        <div class="metrics" style="margin-bottom:12px;">
+          <div class="metric"><div class="label">Claimed</div>
+            <div class="value">${money(claim.claimed_amount)}</div></div>
+          <div class="metric"><div class="label">Policy cover</div>
+            <div class="value">${money(claim.coverage_limit)}</div></div>
+          <div class="metric"><div class="label">Incident</div>
+            <div class="value" style="font-size:.92rem;">${esc(claim.incident_date || "—")}</div></div>
+          <div class="metric"><div class="label">Evidence</div>
+            <div class="value">${(claim.verified_documents || []).length} accepted</div></div>
+        </div>
+        <div class="tiny" style="margin-bottom:10px;">Accepted documents:
+          ${(claim.verified_documents || []).map(d => esc(humanise(d))).join(", ") || "none"}</div>
+        ${signals.map(sig => alertBox("warn",
+          `<b>${esc(sig.signal_type)}</b> (severity ${esc(sig.severity)}) — ${esc(sig.explanation)}`)).join("")}
+        <label class="field"><span>Settlement amount (approving only)</span>
+          <input type="text" inputmode="decimal" class="a-amount"
+                 value="${claim.claimed_amount ?? ""}"></label>
+        <label class="field"><span>Reason — the customer sees this</span>
+          <textarea rows="2" class="a-note"
+            placeholder="e.g. Repair invoice matches the estimate; approving in full."></textarea></label>
+        <div class="btn-row">
+          <button class="btn btn-ok a-approve">✅ Approve claim &amp; settle</button>
+          <button class="btn a-more">Ask for more information</button>
+          <button class="btn btn-danger a-decline">Decline claim</button>
+        </div>
+        <div class="a-result"></div>
+      </div>`;
+
+    const decide = async (decision, button) => {
+      const note = node.querySelector(".a-note").value.trim();
+      if (!note) { toast("A decision needs a reason — the customer sees it.", "err"); return; }
+      const amount = parseFloat(String(node.querySelector(".a-amount").value).replace(/[^\d.]/g, ""));
+      await withBusy(button, async () => {
+        try {
+          const result = await api("POST", `/staff/claims/${claim.id}/assess`,
+            { json: { decision, amount: decision === "APPROVE" ? amount : null, note } });
+          toast(`Claim ${result.status.toLowerCase()}. The customer has been told.`, "ok");
+          loadAssess();
+        } catch (error) {
+          node.querySelector(".a-result").innerHTML = alertBox("error", esc(error.message));
+        }
+      });
+    };
+    node.querySelector(".a-approve").addEventListener("click", e => decide("APPROVE", e.currentTarget));
+    node.querySelector(".a-more").addEventListener("click", e => decide("MORE_INFO", e.currentTarget));
+    node.querySelector(".a-decline").addEventListener("click", e => decide("DECLINE", e.currentTarget));
+    list.append(node);
+  });
+}
+
+// ============================================================ diary
+// How a claims handler actually works: a dated list of claims that come back to
+// them, most overdue first. Before this, a claim only resurfaced when the
+// customer chased — which is how the demo data ended up with claims untouched
+// for 80+ days.
+let diaryMine = false;
+
+async function loadDiary() {
+  const host = document.getElementById("diary-body");
+  host.innerHTML = '<div class="skel" style="width:44%"></div>';
+  const d = await api("GET", `/staff/diary${diaryMine ? "?mine=true" : ""}`);
+  const items = d.items || [];
+  const sm = d.summary || {};
+  document.getElementById("c-diary").textContent = sm.due_today ?? 0;
+
+  host.innerHTML = `
+    <div class="row-between" style="margin-bottom:12px;">
+      <div>
+        <h2>${sm.due_today || 0} claim(s) need you today</h2>
+        <div class="tiny">Most overdue first. ${sm.overdue || 0} past their review
+          date${sm.at_risk ? `, ${sm.at_risk} untouched for ${d.at_risk_days}+ days` : ""}.</div>
+      </div>
+      <div class="chip-row">
+        <button class="chip ${diaryMine ? "" : "on"}" data-mine="0">Everyone</button>
+        <button class="chip ${diaryMine ? "on" : ""}" data-mine="1">Mine</button>
+      </div>
+    </div>
+    <div id="diary-list"></div>`;
+
+  host.querySelectorAll("[data-mine]").forEach(b => b.addEventListener("click", () => {
+    diaryMine = b.dataset.mine === "1"; loadDiary();
+  }));
+
+  const list = document.getElementById("diary-list");
+  if (!items.length) {
+    list.innerHTML = `<div class="empty"><div class="big">✅</div>Nothing due. The
+      diary is clear.</div>`;
+    return;
+  }
+
+  items.forEach(it => {
+    const row = el("div", { class: "diary-row" + (it.at_risk ? " at-risk" : "") });
+    const overdue = it.days_overdue > 0
+      ? `<span class="pill warn">${it.days_overdue} day(s) overdue</span>`
+      : `<span class="pill quiet">due today</span>`;
+    const chased = it.chase_count
+      ? `<span class="pill quiet">chased ${it.chase_count}×</span>` : "";
+    // After repeated chases the answer is a phone call, not another message.
+    const call = it.chases_exhausted
+      ? `<span class="pill warn">needs a call, not another message</span>` : "";
+
+    row.innerHTML = `
+      <div class="diary-head">
+        <div>
+          <span class="ref-tag">${esc(it.claim_number)}</span>
+          <b style="margin-left:8px;">${esc(it.customer_name)}</b>
+          <span class="tiny" style="margin-left:8px;">${esc(it.claim_type)}</span>
+        </div>
+        <div>${statusBadge(it.status)}${
+          it.handler ? `<span class="who-tag">${esc(it.handler)}</span>`
+                     : `<span class="who-tag none">unassigned</span>`}</div>
+      </div>
+      <div class="diary-action">${esc(it.action)}</div>
+      <div class="claim-row-bits">${overdue} ${chased} ${call}
+        <span class="pill quiet">no movement for ${it.days_since_movement} day(s)</span>
+        <span data-consist="${esc(it.id)}"></span></div>
+      <div class="claim-row-foot">
+        <span class="tiny">${
+          // The backfilled note is just the action restated; showing both puts
+          // the same sentence on screen twice.
+          esc(it.diary_note && it.diary_note !== it.action ? it.diary_note : "")}</span>
+        <span>
+          ${it.action.startsWith("Chase")
+            ? `<button class="btn small btn-primary" data-chase="${esc(it.id)}">Draft a chase</button>`
+            : ""}
+          <button class="btn small" data-defer="${esc(it.id)}">Push out 7 days</button>
+        </span>
+      </div>`;
+    list.append(row);
+  });
+
+  // Checked per row after render rather than in the diary query: it reads every
+  // document on the claim, and doing it inline would make the diary slow to open.
+  list.querySelectorAll("[data-consist]").forEach(async slot => {
+    try {
+      const r = await api("GET", `/staff/claims/${slot.dataset.consist}/consistency`);
+      if (!r.findings.length) return;
+      const serious = r.serious > 0;
+      slot.innerHTML = `<button class="pill ${serious ? "bad" : "warn"} pill-btn"
+        data-open-consist="${esc(slot.dataset.consist)}">${
+        serious ? "⚠ " : ""}${r.findings.length} paperwork issue(s)</button>`;
+      slot.querySelector("[data-open-consist]").addEventListener(
+        "click", () => openConsistency(slot.dataset.consist));
+    } catch { /* advisory only — never block the diary on it */ }
+  });
+
+  list.querySelectorAll("[data-chase]").forEach(b =>
+    b.addEventListener("click", () => openChase(b.dataset.chase)));
+
+  list.querySelectorAll("[data-defer]").forEach(b =>
+    b.addEventListener("click", async event => {
+      await withBusy(event.currentTarget, async () => {
+        const when = new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 10);
+        try {
+          await api("POST", `/staff/claims/${b.dataset.defer}/review-date`,
+                    { json: { when, note: "Pushed out by the handler" } });
+          toast(`Back in your diary on ${when}.`, "ok");
+        } catch (error) { toast(error.message, "err"); }
+        loadDiary();
+      });
+    }));
+}
+
+// What disagrees with what, and a short read on what it likely means. The
+// findings are computed, not generated — a handler challenging a customer has
+// to be able to say exactly which document said what.
+async function openConsistency(claimId) {
+  const host = document.getElementById("diary-list");
+  const box = el("div", { class: "consist-box" });
+  box.innerHTML = `<div class="tiny">Checking the paperwork…</div>`;
+  host.prepend(box);
+
+  let r;
+  try {
+    r = await api("GET", `/staff/claims/${claimId}/consistency?explain=true`);
+  } catch (error) { toast(error.message, "err"); box.remove(); return; }
+
+  const rows = r.findings.map(f => `
+    <div class="finding ${esc(f.severity)}">
+      <div class="finding-head">
+        <span class="finding-sev">${f.severity === "serious" ? "Serious" : "Check"}</span>
+        <b>${esc(f.summary)}</b>
+      </div>
+      <div class="finding-detail">${esc(f.detail)}</div>
+    </div>`).join("");
+
+  box.innerHTML = `
+    <div class="chase-head">
+      <b>${esc(r.claim_number)} — the documents disagree</b>
+      <span class="tiny">${r.serious} serious · ${r.checks} to check. Each was
+        valid on its own; these are the disagreements between them.</span>
+    </div>
+    ${rows}
+    ${r.interpretation ? `<div class="consist-read">
+      <div class="consist-read-label">What this likely means</div>
+      ${esc(r.interpretation)}</div>`
+      // The findings are the substance; the read is a bonus. Say it is missing
+      // rather than leaving a silent gap the handler might not notice.
+      : (r.degraded ? `<div class="tiny err-line" style="margin-top:9px;">
+          The model is unavailable, so there's no interpretation — the findings
+          above are unaffected.</div>` : "")}
+    <div class="chase-foot">
+      <span class="tiny">Advisory. Nothing here rejects a document or decides
+        the claim.</span>
+      <button class="btn small" data-close>Close</button>
+    </div>`;
+  box.querySelector("[data-close]").addEventListener("click", () => box.remove());
+  box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+// The draft is the AI's contribution: the handler still reads, edits and owns
+// the words. It is never sent without them pressing send.
+async function openChase(claimId) {
+  const host = document.getElementById("diary-list");
+  const box = el("div", { class: "chase-box" });
+  box.innerHTML = `<div class="tiny">Drafting…</div>`;
+  host.prepend(box);
+
+  let draft;
+  try {
+    draft = await api("POST", `/staff/claims/${claimId}/draft-chase`);
+  } catch (error) { toast(error.message, "err"); box.remove(); return; }
+
+  box.innerHTML = `
+    <div class="chase-head">
+      <b>Chase — your words, drafted for you</b>
+      <span class="tiny">Asking for: ${esc(draft.waiting_on_customer.join(", "))}${
+        draft.already_with_us.length
+          ? ` · not asking for ${esc(draft.already_with_us.join(", "))} (already with us)`
+          : ""}</span>
+    </div>
+    <textarea class="chase-text" rows="7">${esc(draft.draft)}</textarea>
+    ${draft.degraded ? `<div class="tiny err-line">Model unavailable — this is a
+      template draft. Worth rewording before sending.</div>` : ""}
+    <div class="chase-foot">
+      <span class="tiny">Edit freely. It sends as you, into the customer's chat.</span>
+      <span>
+        <button class="btn small" data-cancel>Cancel</button>
+        <button class="btn small btn-primary" data-send>Send and re-diarise</button>
+      </span>
+    </div>`;
+
+  box.querySelector("[data-cancel]").addEventListener("click", () => box.remove());
+  box.querySelector("[data-send]").addEventListener("click", async event => {
+    await withBusy(event.currentTarget, async () => {
+      const message = box.querySelector(".chase-text").value.trim();
+      if (!message) { toast("Nothing to send.", "err"); return; }
+      try {
+        const r = await api("POST", `/staff/claims/${claimId}/chase`,
+                            { json: { message, set_next_review: true } });
+        toast(`Sent. Back in your diary on ${r.next_review_date}.`, "ok");
+      } catch (error) { toast(error.message, "err"); }
+      loadDiary();
+    });
+  });
+}
+
+// ============================================================ claims book
+// Cases only ever listed escalations, so a claim registered from a notification
+// of loss appeared nowhere in the console — the customer was told who was
+// looking after it while no handler could see it. This is that list.
+let bookFilter = "all";
+
+async function loadBook() {
+  const host = document.getElementById("book-body");
+  host.innerHTML = '<div class="skel" style="width:42%"></div>';
+  const data = await api("GET", "/staff/claims");
+  const all = data.claims || [];
+  document.getElementById("c-book").textContent = all.length;
+
+  const mine = all.filter(c => c.handler === session.name);
+  const unassigned = all.filter(c => !c.handler);
+  const waiting = all.filter(c => c.needs_attention || c.unread_docs);
+
+  const sets = { all, mine, unassigned, waiting };
+  const rows = sets[bookFilter] || all;
+
+  const tab = (key, label, n) =>
+    `<button class="chip ${bookFilter === key ? "on" : ""}" data-filter="${key}">${label} · ${n}</button>`;
+
+  host.innerHTML = `<div class="row-between" style="margin-bottom:12px;">
+      <div>
+        <h2>${all.length} live claim(s)</h2>
+        <div class="tiny">Every claim still open, oldest first. Registered
+          notifications of loss appear here the moment the bot creates them.</div>
+      </div>
+      <div class="chip-row">
+        ${tab("all", "All", all.length)}
+        ${tab("mine", "Mine", mine.length)}
+        ${tab("unassigned", "Unassigned", unassigned.length)}
+        ${tab("waiting", "Needs me", waiting.length)}
+      </div>
+    </div>
+    <div id="book-list"></div>`;
+
+  host.querySelectorAll(".chip[data-filter]").forEach(chip =>
+    chip.addEventListener("click", () => { bookFilter = chip.dataset.filter; loadBook(); }));
+
+  const list = document.getElementById("book-list");
+  if (!rows.length) {
+    list.innerHTML = `<div class="empty"><div class="big">✅</div>Nothing here.</div>`;
+    return;
+  }
+
+  rows.forEach(c => {
+    const card = el("div", { class: "claim-row" });
+    // What the handler needs at a glance: who owns it, what it is blocked on,
+    // and whether anything is sitting with us rather than with the customer.
+    const owner = c.handler
+      ? `<span class="who-tag">${esc(c.handler)}</span>`
+      : `<span class="who-tag none">unassigned</span>`;
+    const bits = [];
+    if (c.unread_docs) bits.push(`<span class="pill warn">${c.unread_docs} document(s) to sign off</span>`);
+    if (c.with_us.length)
+      bits.push(`<span class="pill">with us: ${esc(c.with_us.join(", "))}</span>`);
+    // Name the documents rather than counting them. "3 awaiting customer" made
+    // the handler open the claim to learn something the row could just say.
+    if (c.awaiting_customer.length)
+      bits.push(`<span class="pill quiet">awaiting customer: ${
+        esc(c.awaiting_customer.join(", "))}</span>`);
+    if (c.fnol_reference) bits.push(`<span class="pill quiet">from ${esc(c.fnol_reference)}</span>`);
+
+    card.innerHTML = `
+      <div class="claim-row-head">
+        <div>
+          <span class="ref-tag">${esc(c.claim_number)}</span>
+          <b style="margin-left:8px;">${esc(c.customer_name)}</b>
+          <span class="tiny" style="margin-left:8px;">${esc(c.claim_type)}</span>
+        </div>
+        <div>${statusBadge(c.status)} ${owner}</div>
+      </div>
+      <div class="claim-row-bits">${bits.join(" ")}</div>
+      <div class="claim-row-foot">
+        <span class="tiny">Filed ${esc((c.filed_at || "").slice(0, 10))}${
+          c.reserve_amount ? ` · reserve £${Number(c.reserve_amount).toLocaleString()}` : ""}${
+          c.claimed_amount ? ` · claimed £${Number(c.claimed_amount).toLocaleString()}` : ""}</span>
+        ${c.handler === session.name
+            ? `<span class="tiny ok-line">Yours</span>`
+            : c.handler ? "" : `<button class="btn small" data-take="${esc(c.id)}">Take this claim</button>`}
+      </div>`;
+    list.append(card);
+  });
+
+  list.querySelectorAll("[data-take]").forEach(btn =>
+    btn.addEventListener("click", async event => {
+      await withBusy(event.currentTarget, async () => {
+        try {
+          await api("POST", `/staff/claims/${btn.dataset.take}/take`);
+          toast("You're handling this claim.", "ok");
+        } catch (error) { toast(error.message, "err"); }
+        loadBook();
+      });
+    }));
+}
+
+const VIEWS = { queue: loadQueue, intake: loadIntake, cases: loadCases,
+                diary: loadDiary, book: loadBook, assess: loadAssess };
+loaded.diary = true;
+loadDiary();
+// Cheap enough to prime the Cases badge on load rather than making the reviewer click to find out.
+api("GET", "/staff/escalations").then(d => {
+  document.getElementById("c-cases").textContent = (d.tickets || []).length;
+}).catch(() => {});
+api("GET", "/staff/fnol").then(d => {
+  document.getElementById("c-intake").textContent = (d.requests || []).length;
+}).catch(() => {});
+api("GET", "/staff/claims").then(d => {
+  document.getElementById("c-book").textContent = (d.claims || []).length;
+}).catch(() => {});
+api("GET", "/staff/review-queue").then(d => {
+  document.getElementById("c-queue").textContent = (d.documents || []).length;
+}).catch(() => {});
+api("GET", "/staff/assessments").then(d => {
+  document.getElementById("c-assess").textContent = (d.claims || []).length;
+}).catch(() => {});
+</script>
+</body>
+</html>

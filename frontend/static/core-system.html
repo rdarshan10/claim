@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>POLARIS — Claims Registration</title>
+<style>
+/* The insurer's internal core system. Deliberately dated: this is the kind of
+   screen a registration bot exists to spare people from. Nothing here shares
+   the customer product's design tokens — it is a different system. */
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: #d4d0c8; color: #1a1a1a;
+  font-family: "Segoe UI", Tahoma, sans-serif; font-size: 13px;
+}
+.titlebar {
+  background: linear-gradient(180deg, #0a3d7a, #06285a);
+  color: #fff; padding: 6px 12px; display: flex; align-items: center; gap: 10px;
+  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+}
+.titlebar .logo {
+  background: #ffb020; color: #06285a; padding: 1px 7px; border-radius: 2px;
+  font-weight: 800; letter-spacing: .06em;
+}
+.titlebar .right { margin-left: auto; font-weight: 400; opacity: .85; font-size: 11px; }
+
+.menubar {
+  background: #ece9d8; border-bottom: 1px solid #aca899;
+  padding: 3px 10px; font-size: 12px; display: flex; gap: 16px; color: #333;
+}
+.menubar span { cursor: default; }
+
+.workspace { padding: 14px; }
+fieldset {
+  border: 1px solid #919b9c; background: #f1efe2; margin: 0 0 12px; padding: 12px 14px 14px;
+}
+legend {
+  font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .07em;
+  color: #06285a; padding: 0 6px;
+}
+.grid { display: grid; grid-template-columns: 172px 1fr 172px 1fr; gap: 9px 12px; align-items: center; }
+.grid label { font-size: 12px; color: #333; text-align: right; }
+.grid .wide { grid-column: 2 / -1; }
+
+input[type=text], select, textarea {
+  width: 100%; font-family: inherit; font-size: 12px; padding: 4px 6px;
+  border: 1px solid #7f9db9; background: #fff; color: #000;
+}
+input:focus, select:focus, textarea:focus { outline: 1px solid #0a3d7a; background: #fffdf0; }
+input[readonly] { background: #ece9d8; color: #555; }
+textarea { resize: none; height: 54px; }
+
+/* The bot's current field. Makes the automation legible to someone watching. */
+.bot-active { background: #fffbcc !important; outline: 2px solid #ffb020; }
+
+.statusline {
+  display: flex; align-items: center; gap: 8px; margin-top: 4px;
+  font-size: 11px; color: #444;
+}
+.pill {
+  display: inline-block; padding: 1px 8px; border-radius: 2px;
+  font-size: 11px; font-weight: 700; letter-spacing: .04em;
+}
+.pill-wait { background: #ece9d8; color: #666; border: 1px solid #aca899; }
+.pill-ok { background: #d8f0d8; color: #14532d; border: 1px solid #7ab77a; }
+.pill-err { background: #f8d7d7; color: #7f1d1d; border: 1px solid #c98b8b; }
+
+.actions { display: flex; gap: 8px; padding: 4px 2px 0; align-items: center; }
+button {
+  font-family: inherit; font-size: 12px; padding: 5px 18px;
+  border: 1px solid #7f9db9; background: linear-gradient(180deg, #fdfdfd, #dfdfd8);
+  cursor: pointer;
+}
+button:hover:not(:disabled) { background: linear-gradient(180deg, #fff, #e8e8e0); }
+button:disabled { color: #999; cursor: not-allowed; }
+button.primary { font-weight: 700; border-color: #0a3d7a; }
+
+#result { margin-top: 12px; }
+.receipt {
+  border: 2px solid #14532d; background: #eaf6ea; padding: 14px 16px;
+}
+.receipt h2 { margin: 0 0 8px; font-size: 15px; color: #14532d; }
+.receipt .claimno {
+  font-family: Consolas, monospace; font-size: 26px; font-weight: 700;
+  letter-spacing: .06em; color: #06285a; margin: 6px 0 10px;
+}
+.receipt dl { margin: 0; display: grid; grid-template-columns: 150px 1fr; gap: 4px 12px; font-size: 12px; }
+.receipt dt { color: #555; }
+.receipt dd { margin: 0; font-weight: 600; }
+
+.footer {
+  margin-top: 14px; padding-top: 8px; border-top: 1px solid #aca899;
+  font-size: 10px; color: #666; display: flex; gap: 18px;
+}
+</style>
+</head>
+<body>
+<div class="titlebar">
+  <span class="logo">POLARIS</span>
+  <span>Claims Management System · v4.2.1</span>
+  <span class="right">Session: RPA_SERVICE_ACCOUNT · Node CLM-APP-02</span>
+</div>
+<div class="menubar">
+  <span>File</span><span>Edit</span><span>Policy</span><span>Claims</span>
+  <span>Reserves</span><span>Reports</span><span>Help</span>
+</div>
+
+<div class="workspace">
+  <fieldset>
+    <legend>Policy Verification</legend>
+    <div class="grid">
+      <label for="policy_number">Policy Number</label>
+      <input type="text" id="policy_number" autocomplete="off">
+      <label for="claimant_name">Claimant</label>
+      <input type="text" id="claimant_name" autocomplete="off">
+    </div>
+    <div class="statusline">
+      <span>Policy status:</span><span class="pill pill-wait" id="policy_status">NOT VERIFIED</span>
+      <button id="verify_btn" style="margin-left:8px;padding:2px 12px;">Verify</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Loss Details</legend>
+    <div class="grid">
+      <label for="loss_type">Loss Type</label>
+      <select id="loss_type">
+        <option value="">— select —</option>
+        <option value="MOTOR">MOTOR</option>
+        <option value="HOME">HOME / PROPERTY</option>
+        <option value="HEALTH">HEALTH / MEDICAL</option>
+      </select>
+      <label for="peril">Peril Code</label>
+      <input type="text" id="peril" autocomplete="off">
+
+      <label for="date_of_loss">Date of Loss</label>
+      <input type="text" id="date_of_loss" placeholder="YYYY-MM-DD" autocomplete="off">
+      <label for="date_reported">Date Reported</label>
+      <input type="text" id="date_reported" autocomplete="off">
+
+      <label for="description">Loss Description</label>
+      <textarea id="description" class="wide"></textarea>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Reserve &amp; Assignment</legend>
+    <div class="grid">
+      <label for="reserve">Initial Reserve (GBP)</label>
+      <input type="text" id="reserve" autocomplete="off">
+      <label for="adjuster">Assigned Adjuster</label>
+      <select id="adjuster">
+        <option value="">— auto-assign —</option>
+        <option value="M.BENNETT">M.BENNETT · Motor</option>
+        <option value="R.OKAFOR">R.OKAFOR · Property</option>
+        <option value="S.PATEL">S.PATEL · Medical</option>
+      </select>
+    </div>
+  </fieldset>
+
+  <div class="actions">
+    <button class="primary" id="register_btn">Register Claim</button>
+    <button id="clear_btn">Clear</button>
+    <span class="pill pill-wait" id="submit_status">READY</span>
+  </div>
+
+  <div id="result"></div>
+
+  <div class="footer">
+    <span>POLARIS CMS 4.2.1</span><span>Env: PROD-EU</span>
+    <span>Terminal: RPA-01</span><span>Records retained per FCA DISP 1.9</span>
+  </div>
+</div>
+
+<script>
+// This page stands in for the insurer's core system. It validates and issues a
+// claim number the way the real one would, so the bot has something genuine to
+// interact with rather than a scripted animation.
+const $ = id => document.getElementById(id);
+
+$("verify_btn").addEventListener("click", () => {
+  const policy = $("policy_number").value.trim();
+  const badge = $("policy_status");
+  // POL followed by digits is this insurer's format; anything else is rejected
+  // exactly as the real system would.
+  if (/^POL\d{4,}$/i.test(policy)) {
+    badge.textContent = "VERIFIED · IN FORCE";
+    badge.className = "pill pill-ok";
+  } else {
+    badge.textContent = "NOT FOUND";
+    badge.className = "pill pill-err";
+  }
+});
+
+$("clear_btn").addEventListener("click", () => {
+  document.querySelectorAll("input, textarea, select").forEach(el => { el.value = ""; });
+  $("policy_status").textContent = "NOT VERIFIED";
+  $("policy_status").className = "pill pill-wait";
+  $("submit_status").textContent = "READY";
+  $("submit_status").className = "pill pill-wait";
+  $("result").innerHTML = "";
+});
+
+$("register_btn").addEventListener("click", () => {
+  const status = $("submit_status");
+  const required = [
+    ["policy_number", "Policy Number"], ["claimant_name", "Claimant"],
+    ["loss_type", "Loss Type"], ["date_of_loss", "Date of Loss"],
+  ];
+  const missing = required.filter(([id]) => !$(id).value.trim()).map(([, label]) => label);
+
+  if (missing.length) {
+    status.textContent = "REJECTED — MISSING: " + missing.join(", ").toUpperCase();
+    status.className = "pill pill-err";
+    return;
+  }
+  if ($("policy_status").textContent.startsWith("NOT")) {
+    status.textContent = "REJECTED — POLICY NOT VERIFIED";
+    status.className = "pill pill-err";
+    return;
+  }
+
+  // Claim numbers are sequential per the insurer's numbering scheme. The real
+  // system reads its own counter; this stand-in is told where the book is up to
+  // via ?seq=, falling back to the session's own counter for manual use.
+  const fromUrl = Number(new URLSearchParams(location.search).get("seq") || 0);
+  const stored = Number(localStorage.getItem("polaris_seq") || 0);
+  const seq = Math.max(fromUrl, stored, 88410) + 1;
+  localStorage.setItem("polaris_seq", String(seq));
+  const claimNumber = "CLM-" + seq;
+
+  const adjuster = $("adjuster").value ||
+    ({ MOTOR: "M.BENNETT", HOME: "R.OKAFOR", HEALTH: "S.PATEL" }[$("loss_type").value] || "M.BENNETT");
+  const reserve = $("reserve").value.trim() || "0.00";
+
+  status.textContent = "REGISTERED";
+  status.className = "pill pill-ok";
+
+  $("result").innerHTML = `
+    <div class="receipt">
+      <h2>✓ Claim Registered Successfully</h2>
+      <div class="claimno" id="issued_claim_number">${claimNumber}</div>
+      <dl>
+        <dt>Policy</dt><dd>${$("policy_number").value}</dd>
+        <dt>Claimant</dt><dd>${$("claimant_name").value}</dd>
+        <dt>Loss type</dt><dd>${$("loss_type").value}</dd>
+        <dt>Date of loss</dt><dd>${$("date_of_loss").value}</dd>
+        <dt>Initial reserve</dt><dd>GBP ${reserve}</dd>
+        <dt>Assigned adjuster</dt><dd id="issued_adjuster">${adjuster}</dd>
+        <dt>Status</dt><dd>OPEN — AWAITING DOCUMENTATION</dd>
+      </dl>
+    </div>`;
+});
+</script>
+</body>
+</html>

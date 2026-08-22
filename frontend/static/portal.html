@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaimCompanion</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/app.css">
+<style>
+/* ------------------------------------------------------------------ chat */
+.chat-shell { display: flex; flex-direction: column; height: calc(100vh - 60px - 45px - 30px); min-height: 460px; }
+.chat-scroll { flex: 1; overflow-y: auto; padding: 6px 2px 14px; scroll-behavior: smooth; }
+
+.msg { display: flex; gap: 11px; margin-bottom: 18px; max-width: 96%; }
+.msg .av { flex-shrink: 0; width: 30px; height: 30px; border-radius: 9px; display: grid;
+           place-items: center; font-size: .88rem; }
+.msg.bot .av { background: var(--navy-900); color: #fff; }
+.msg .av svg { width: 15px; height: 15px; display: block; }
+.msg.me { flex-direction: row-reverse; margin-left: auto; }
+.msg.me .av { background: var(--indigo-100); color: var(--indigo-600); }
+
+.bubble { padding: 11px 15px; border-radius: 14px; font-size: .91rem; line-height: 1.6; max-width: 640px; }
+.msg.bot .bubble { background: var(--surface); border: 1px solid var(--line); border-top-left-radius: 4px;
+                   box-shadow: var(--shadow-sm); }
+.msg.me .bubble { background: var(--indigo-600); color: #fff; border-top-right-radius: 4px; }
+.msg .relay { font-size: .74rem; color: var(--ink-4); margin-bottom: 5px; display: block; }
+.msg-cards { margin-left: 41px; margin-bottom: 18px; max-width: 660px; }
+.msg-cards .card { margin-bottom: 10px; }
+
+.sys-note { text-align: center; font-size: .78rem; color: var(--ink-4); margin: 12px 0; font-style: italic; }
+.away { text-align: center; font-size: .76rem; color: var(--ink-4); margin: 18px 0 10px;
+        display: flex; align-items: center; gap: 12px; }
+.away::before, .away::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+
+.composer { border-top: 1px solid var(--line); background: var(--surface); padding: 12px 14px;
+            border-radius: var(--r-lg); box-shadow: var(--shadow); border: 1px solid var(--line); }
+.composer .row { align-items: flex-end; }
+.composer textarea { border: 0; box-shadow: none !important; padding: 6px 4px; min-height: 24px;
+                     max-height: 150px; resize: none; font-size: .92rem; }
+.chips { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 10px; }
+.chip-sugg { padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line-2);
+             background: var(--surface); font-size: .82rem; color: var(--ink-2); cursor: pointer;
+             transition: .13s; font-family: inherit; }
+.chip-sugg:hover { border-color: var(--indigo-500); color: var(--indigo-600); background: var(--indigo-50); }
+
+.typing { display: flex; gap: 4px; padding: 4px 0; }
+.typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-4); animation: bounce 1.3s infinite; }
+.typing span:nth-child(2) { animation-delay: .16s; }
+.typing span:nth-child(3) { animation-delay: .32s; }
+@keyframes bounce { 0%,60%,100% { opacity: .3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-4px); } }
+
+/* ------------------------------------------------------------ timeline card */
+.tl-card .tl-head { display: flex; align-items: flex-start; gap: 12px; }
+.tl-num { font-weight: 660; font-size: 1.02rem; letter-spacing: -.01em; }
+.tl-meaning { font-size: .84rem; color: var(--ink-3); margin-top: 2px; }
+.steps { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 14px; padding-top: 12px;
+         border-top: 1px solid var(--line); }
+.step { display: flex; align-items: center; gap: 7px; font-size: .8rem; }
+.step-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--indigo-500); flex-shrink: 0; }
+
+.check-item { padding: 9px 0; border-bottom: 1px solid var(--line); }
+.check-item:last-child { border-bottom: 0; }
+.check-ico { font-size: .95rem; }
+
+.reject-card { border-left: 3px solid var(--red); }
+.reject-head { display: flex; gap: 11px; align-items: center; }
+.reject-ico { font-size: 1.15rem; }
+.annot-img { max-width: 100%; border-radius: var(--r); border: 1px solid var(--line); margin-top: 12px; display: block; }
+.fix { margin-top: 14px; padding: 13px 15px; background: var(--surface-2); border-radius: var(--r); }
+.fix h4 { margin-bottom: 7px; }
+.fix ol { margin: 0; padding-left: 19px; font-size: .87rem; line-height: 1.7; }
+.citations { margin-top: 7px; font-size: .77rem; color: var(--ink-4); }
+.cite { display: inline-block; margin-right: 8px; }
+
+/* ---------------------------------------------------------------- claims */
+.claim-card { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface);
+              margin-bottom: 14px; overflow: hidden; box-shadow: var(--shadow-sm); }
+.claim-top { display: flex; align-items: center; gap: 13px; padding: 15px 18px; cursor: pointer; user-select: none; }
+.claim-top:hover { background: var(--surface-2); }
+.claim-title { font-weight: 640; font-size: .98rem; }
+.claim-sub { font-size: .81rem; color: var(--ink-3); margin-top: 1px; }
+.claim-body { padding: 0 18px 18px; border-top: 1px solid var(--line); }
+.caret { color: var(--ink-4); transition: transform .17s; font-size: 1.15rem; }
+.claim-card.open .caret { transform: rotate(90deg); }
+
+</style>
+</head>
+<body>
+<div id="header-slot"></div>
+
+<nav class="tabbar">
+  <button class="tab active" data-panel="chat">💬 Assistant</button>
+  <button class="tab" data-panel="claims">📋 My claims</button>
+  <div class="header-spacer"></div>
+  <button class="tab" id="new-convo" title="Start a fresh conversation">＋ New conversation</button>
+</nav>
+
+<div class="container">
+  <section class="panel active" id="panel-chat">
+    <div class="chat-shell">
+      <div id="handoff-banner"></div>
+      <div class="chat-scroll" id="thread">
+        <div class="skel" style="width:56%"></div><div class="skel" style="width:38%"></div>
+      </div>
+      <div id="chips" class="chips"></div>
+      <div class="composer" id="composer">
+        <div id="attach-preview"></div>
+        <div class="row">
+          <button class="btn-attach" id="attach" title="Attach a document">📎</button>
+          <textarea id="input" class="grow" rows="1" placeholder="Ask me anything, or attach a document with 📎"></textarea>
+          <button class="btn btn-primary" id="send">Send</button>
+        </div>
+        <input type="file" id="chat-file" class="hidden" multiple
+               accept=".txt,.md,.csv,.json,.png,.jpg,.jpeg,.pdf">
+      </div>
+      <div class="drop-overlay hidden" id="drop-overlay">
+        <div class="drop-overlay-inner">📎 Drop to attach to your claim</div>
+      </div>
+      <div class="tiny" id="poll-note" style="margin-top:8px;text-align:center;"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="panel-claims"><div id="claims-list"></div></section>
+
+</div>
+
+<script type="module">
+import { api, session, esc, md, richText, money, pct, humanise, titleCase, statusBadge,
+         requireAuth, mountHeader, wireHeader, toast, alertBox, withBusy, el } from "/static/js/api.js";
+import { timelineCard, checklistCard, rejectionCard, renderCard, confidenceMetrics, jsonBlock } from "/static/js/cards.js";
+import { statusCard as fnolStatusCard } from "/static/js/fnol-cards.js";
+import { mountDemoBar } from "/static/js/demo-bar.js";
+
+if (!requireAuth("customer")) throw new Error("redirecting");
+document.getElementById("header-slot").innerHTML = mountHeader("Your claim");
+wireHeader();
+
+// Demo controls: switch model, or wipe the chat and start the run again.
+mountDemoBar(document.getElementById("demo-slot"), {
+  onReset: async () => {
+    // Everything on screen came from state that no longer exists.
+    clearTimeout(state.polling);
+    state.cards = {};
+    claimsCache = null;
+    fnolCache = null;
+    await startConversation(true);
+    document.getElementById("claims-list").innerHTML = "";
+  },
+});
+
+// ---------------------------------------------------------------- tabs
+const panels = document.querySelectorAll(".panel");
+document.querySelectorAll(".tab[data-panel]").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab[data-panel]").forEach(t => t.classList.toggle("active", t === tab));
+    panels.forEach(p => p.classList.toggle("active", p.id === `panel-${tab.dataset.panel}`));
+    if (tab.dataset.panel === "claims") loadClaims();
+  });
+});
+
+// ---------------------------------------------------------------- chat
+// Drawn rather than an emoji: the shield glyph renders monochrome on some
+// systems and vanishes against the dark avatar tile.
+const SHIELD = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+  <path d="M12 1.6 3.6 5v6.4c0 5.2 3.6 10 8.4 11.2 4.8-1.2 8.4-6 8.4-11.2V5L12 1.6Z"/></svg>`;
+
+const state = { cid: null, greeting: "", cards: {}, awayMarker: null, activeClaimId: null, polling: null, busy: false };
+const thread = document.getElementById("thread");
+
+async function startConversation(fresh = false) {
+  const result = await api("POST", "/chat/conversations", fresh ? { params: { fresh: "true" } } : {});
+  state.cid = result.conversation_id;
+  state.greeting = result.greeting;
+  state.cards = {};
+  state.awayMarker = null;
+  renderThread({ messages: [], suggestions: result.suggestions || [] });
+  await refresh();
+}
+
+function bubble(role, content, opts = {}) {
+  const mine = role === "user";
+  const node = el("div", { class: `msg ${mine ? "me" : "bot"}` },
+    el("div", { class: "av", html: mine ? "🧑" : SHIELD }),
+    el("div", { class: "bubble" }));
+  const body = node.querySelector(".bubble");
+  // Relayed answers stay in the assistant's voice, but the customer is told a
+  // real person is behind them.
+  if (opts.author) body.append(el("span", { class: "relay" }, `🤝 Relayed from ${opts.author}, claims team`));
+  // The customer's own words are one line; the assistant's answers carry lists
+  // and references worth laying out properly.
+  body.insertAdjacentHTML("beforeend", mine ? md(content) : richText(content));
+  return node;
+}
+
+function renderThread(payload) {
+  const messages = payload.messages || [];
+  // A notification is carried on every turn of its intake. Only the last card
+  // for each one becomes a live control; earlier ones stay as history.
+  const liveFnol = new Map();
+  for (const message of messages) {
+    for (const card of state.cards[message.id] || []) {
+      if (String(card.card_type || "").startsWith("fnol_") && card.payload?.fnol_id) {
+        liveFnol.set(card.payload.fnol_id, card);
+      }
+    }
+  }
+  const stick = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 130;
+  thread.innerHTML = "";
+  thread.append(bubble("assistant", state.greeting));
+
+  for (const message of messages) {
+    if (message.id === state.awayMarker) {
+      thread.append(el("div", { class: "away" }, "while you were away"));
+    }
+    if (message.role === "system") {
+      thread.append(el("div", { class: "sys-note" }, message.content));
+      continue;
+    }
+    thread.append(bubble(message.role, message.content, { author: message.author_name }));
+    const cards = state.cards[message.id] || [];
+    if (cards.length) {
+      const host = el("div", { class: "msg-cards" });
+      cards.forEach(card => {
+        const isFnol = String(card.card_type || "").startsWith("fnol_");
+        // Superseded intake cards are dropped rather than shown stale: the one
+        // live control for that notification is rendered further down.
+        if (isFnol && card.payload?.fnol_id && liveFnol.get(card.payload.fnol_id) !== card) return;
+        renderCard(host, card, cardHandlers(host), true);
+      });
+      thread.append(host);
+    }
+  }
+
+  // Chips come from the poll response so they follow the checklist — once the
+  // police report is accepted, stop offering to explain how to get one.
+  const chips = document.getElementById("chips");
+  chips.innerHTML = "";
+  (payload.suggestions || []).forEach(suggestion => {
+    chips.append(el("button", { class: "chip-sugg", onclick: () => send(suggestion) }, suggestion));
+  });
+
+  if (stick) thread.scrollTop = thread.scrollHeight;
+}
+
+/** Intake advances in place: answering one card appends the next to the same
+ *  host, so the customer stays in the flow rather than waiting on a round trip
+ *  through the chat. */
+function cardHandlers(host) {
+  return {
+    onAnswered: result => {
+      if (!result?.card) return;
+      renderCard(host, result.card, cardHandlers(host));
+      host.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    },
+    // Taking up the offer is just the customer asking, in their own words.
+    onAskHuman: () => send("Yes please, I'd like to speak to someone."),
+    // Attach without leaving the conversation. The claim is already known from
+    // the card, so the picker opens straight away.
+    onUpload: claimId => {
+      if (claimId) state.activeClaimId = claimId;
+      document.getElementById("chat-file").click();
+    },
+    onSubmitted: result => {
+      if (result?.card) renderCard(host, result.card, cardHandlers(host));
+      claimsCache = null;   // a notification now exists
+      fnolCache = null;
+      refresh();            // pull the confirmation the server posted
+    },
+  };
+}
+
+function renderHandoff(handoff) {
+  const banner = document.getElementById("handoff-banner");
+  if (!handoff) { banner.innerHTML = ""; return; }
+  const who = handoff.assigned_to;
+  banner.innerHTML = alertBox("info", who
+    ? `🤝 <b>${esc(who)}</b> from our claims team is on your case (ref <b>${esc(handoff.ticket_reference)}</b>).
+       I'll bring their answer straight here — no need to chase.`
+    : `🤝 I've taken your case to our claims team (ref <b>${esc(handoff.ticket_reference)}</b>).
+       I'll bring their answer straight here.`);
+}
+
+async function refresh() {
+  if (state.busy) return;
+  const payload = await api("GET", `/chat/conversations/${state.cid}/messages`);
+  const messages = payload.messages || [];
+
+  // Only mark the divider once per resumed session; polling shouldn't keep
+  // re-announcing it.
+  if (state.awayMarker === null) {
+    const unseen = payload.unseen || 0;
+    state.awayMarker = (unseen && messages.length >= unseen) ? messages[messages.length - unseen].id : undefined;
+  }
+
+  renderThread(payload);
+  renderHandoff(payload.handoff);
+
+  // A waiting customer shouldn't have to refresh to see a reviewer's reply.
+  clearTimeout(state.polling);
+  const note = document.getElementById("poll-note");
+  // Poll while anything is pending on our side: a reviewer's reply, or a
+  // notification the claims team is still working through. Registration lands
+  // as a message in this thread, so the customer sees it without doing anything.
+  const awaitingFnol = (fnolCache || []).some(n =>
+    ["SUBMITTED", "UNDER_REVIEW", "READY_TO_REGISTER", "REGISTERING"].includes(n.status));
+  if (payload.handoff || awaitingFnol) {
+    note.textContent = payload.handoff
+      ? "Waiting on my colleague — this updates automatically."
+      : "Your notification is with our claims team — this updates automatically.";
+    state.polling = setTimeout(async () => {
+      // Refresh the notification list too, or the poll never learns it can stop.
+      try { fnolCache = ((await api("GET", "/fnol")).notifications || [])
+              .filter(n => n.status !== "REGISTERED"); } catch { /* transient */ }
+      refresh();
+    }, 6000);
+  } else {
+    note.textContent = "";
+  }
+}
+
+async function send(text) {
+  const input = document.getElementById("input");
+  const message = (text ?? input.value).trim();
+  if (!message || state.busy) return;
+  input.value = "";
+  input.style.height = "auto";
+  state.busy = true;
+
+  thread.append(bubble("user", message));
+  const pending = el("div", { class: "msg bot" },
+    el("div", { class: "av", html: SHIELD }),
+    el("div", { class: "bubble", html: '<div class="typing"><span></span><span></span><span></span></div>' }));
+  thread.append(pending);
+  thread.scrollTop = thread.scrollHeight;
+
+  try {
+    const result = await api("POST", `/chat/conversations/${state.cid}/messages`, {
+      json: { message, claim_id: state.activeClaimId },
+    });
+    state.activeClaimId = result.active_claim_id;
+    if (result.message_id && result.cards) state.cards[result.message_id] = result.cards;
+
+    // Guardrail flags are internal telemetry — "possibly_out_of_scope" means
+    // nothing to a customer and reads like something went wrong. Only surface
+    // the two states that actually change what they are seeing.
+    if (result.degraded) {
+      // Say what it means for them, not what is wrong with us. Their claim is
+      // untouched by this, and a person is still available — that is the part
+      // worth telling them.
+      toast("That answer is shorter than usual — ask me again if you need more, "
+            + "or say 'talk to a person'. Nothing about your claim is affected.");
+    }
+    if (result.guardrail_flags?.length) {
+      console.debug("guardrail flags:", result.guardrail_flags);
+    }
+  } catch (error) {
+    toast(error.message, "err");
+  } finally {
+    state.busy = false;
+    pending.remove();
+    await refresh();
+  }
+}
+
+// ---------------------------------------------------------------- attach
+// Uploads run through the same endpoint and pipeline as the Upload tab; the
+// only difference is that the result is reported as a message in the thread.
+const attachInput = document.getElementById("chat-file");
+document.getElementById("attach").addEventListener("click", () => attachInput.click());
+attachInput.addEventListener("change", () => {
+  if (attachInput.files.length) attachFiles([...attachInput.files]);
+  attachInput.value = "";
+});
+
+// Drag anywhere over the chat, not just onto a small target.
+const overlay = document.getElementById("drop-overlay");
+let dragDepth = 0;
+window.addEventListener("dragenter", event => {
+  if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+  dragDepth += 1;
+  overlay.classList.remove("hidden");
+});
+window.addEventListener("dragleave", () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) overlay.classList.add("hidden");
+});
+window.addEventListener("dragover", event => event.preventDefault());
+window.addEventListener("drop", event => {
+  event.preventDefault();
+  dragDepth = 0;
+  overlay.classList.add("hidden");
+  const files = [...(event.dataTransfer?.files || [])];
+  if (files.length) attachFiles(files);
+});
+
+/** Which claim an attachment belongs to.
+ *  The conversation's active claim if the assistant has established one;
+ *  otherwise the only open claim. With several and no context, ask — guessing
+ *  would file a police report against the wrong claim. */
+async function resolveClaim() {
+  const data = await api("GET", "/claims");
+  const claims = data.claims || [];
+  if (!claims.length) return { error: "You don't have a claim to upload against yet." };
+
+  if (state.activeClaimId) {
+    const match = claims.find(c => c.id === state.activeClaimId);
+    if (match) return { claim: match };
+  }
+  const open = claims.filter(c => !["SETTLED", "REJECTED", "WITHDRAWN"].includes(c.status));
+  if (open.length === 1) return { claim: open[0] };
+  return { choices: open.length ? open : claims };
+}
+
+async function attachFiles(files) {
+  const resolved = await resolveClaim();
+  if (resolved.error) { toast(resolved.error, "err"); return; }
+  if (resolved.choices) { askWhichClaim(resolved.choices, files); return; }
+  for (const file of files) await uploadToChat(file, resolved.claim);
+}
+
+/** More than one open claim and nothing in context — let them pick rather than
+ *  filing it against the wrong one. */
+function askWhichClaim(claims, files) {
+  const host = el("div", { class: "msg-cards" });
+  const card = el("div", { class: "card card-tight" });
+  card.innerHTML = `<b>Which claim is this for?</b>
+    <div class="tiny" style="margin-bottom:9px;">
+      ${files.map(f => esc(f.name)).join(", ")}</div>
+    <div class="btn-row"></div>`;
+  const row = card.querySelector(".btn-row");
+  claims.forEach(claim => {
+    const button = el("button", { class: "btn btn-sm" },
+      `${claim.claim_number} · ${titleCase(claim.claim_type)}`);
+    button.addEventListener("click", async () => {
+      state.activeClaimId = claim.id;
+      host.remove();
+      for (const file of files) await uploadToChat(file, claim);
+    });
+    row.append(button);
+  });
+  host.append(card);
+  thread.append(host);
+  thread.scrollTop = thread.scrollHeight;
+}
+
+const UPLOAD_STAGES = {
+  UPLOADED: "Uploading…", SCANNING: "Checking the file…",
+  OCR: "Reading it…", CLASSIFYING: "Working out what it is…",
+  EXTRACTING: "Pulling out the details…", VALIDATING: "Checking it against your claim…",
+};
+
+async function uploadToChat(file, claim) {
+  // Shown as the customer's own message: they sent it, so it belongs on their
+  // side of the thread like anything else they sent.
+  const sent = el("div", { class: "msg me" },
+    el("div", { class: "av" }, "🧑"),
+    el("div", { class: "bubble attach-bubble" }, `📎 ${file.name}`));
+  thread.append(sent);
+
+  const status = el("div", { class: "msg bot" },
+    el("div", { class: "av", html: SHIELD }),
+    el("div", { class: "bubble" },
+      el("span", { class: "spinner" }), " Uploading…"));
+  thread.append(status);
+  thread.scrollTop = thread.scrollHeight;
+
+  const bubble = status.querySelector(".bubble");
+  try {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    const started = await api("POST", `/claims/${claim.id}/documents`, { form });
+
+    for (let attempt = 0; attempt < 90; attempt++) {
+      const document_ = await api("GET", `/documents/${started.doc_id}`);
+      const stage = UPLOAD_STAGES[document_.status];
+      if (stage) {
+        bubble.innerHTML = `<span class="spinner"></span> ${esc(stage)}`;
+        await new Promise(r => setTimeout(r, 1000));
+        continue;
+      }
+      status.remove();
+      showVerdict(document_, started.doc_id, claim);
+      claimsCache = null;          // the checklist just changed
+      return;
+    }
+    bubble.textContent = "Still processing — I'll update your claim when it's done.";
+  } catch (error) {
+    status.remove();
+    thread.append(bubble2("⚠️ " + error.message));
+  }
+}
+
+function bubble2(text) {
+  return el("div", { class: "msg bot" },
+    el("div", { class: "av", html: SHIELD }),
+    el("div", { class: "bubble" }, text));
+}
+
+function showVerdict(document_, docId, claim) {
+  const label = humanise(document_.doc_type || "document");
+  const rec = (document_.rejection || {}).recommendation;
+  let text;
+
+  if (document_.status === "VERIFIED") {
+    text = `Thanks — your ${label} has been accepted for ${claim.claim_number}.`;
+  } else if (document_.status === "NEEDS_REVIEW" && rec === "ACCEPT") {
+    text = `Got it — your ${label} looks right. One of our claims handlers is `
+         + `confirming it now, and I'll let you know here as soon as it's accepted.`;
+  } else if (document_.status === "NEEDS_REVIEW") {
+    text = `Thanks — a colleague is taking a closer look at your ${label}. `
+         + `That usually takes 1–2 working days.`;
+  } else if (document_.superseded) {
+    text = `We couldn't accept that ${label}, but you don't need to do anything — `
+         + `we already have one on file for this claim.`;
+  } else {
+    text = `I couldn't accept that ${label} — here's why:`;
+  }
+
+  thread.append(bubble2(text));
+
+  // A rejection needs the full explanation card, not a sentence.
+  if (document_.rejection && rec !== "ACCEPT" && document_.status !== "VERIFIED") {
+    const host = el("div", { class: "msg-cards" });
+    host.append(rejectionCard(document_.rejection, docId));
+    thread.append(host);
+  }
+  thread.scrollTop = thread.scrollHeight;
+  // Pull the checklist forward so the next card reflects what is still missing.
+  refresh();
+}
+
+document.getElementById("send").addEventListener("click", () => send());
+const input = document.getElementById("input");
+input.addEventListener("keydown", event => {
+  if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); }
+});
+input.addEventListener("input", () => {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 150) + "px";
+});
+document.getElementById("new-convo").addEventListener("click", async () => {
+  clearTimeout(state.polling);
+  await startConversation(true);
+});
+
+// ---------------------------------------------------------------- claims
+let claimsCache = null;
+let fnolCache = null;
+
+async function loadClaims(force = false) {
+  const host = document.getElementById("claims-list");
+  if (claimsCache && !force) return;
+  host.innerHTML = '<div class="skel" style="width:60%"></div><div class="skel" style="width:44%"></div>';
+
+  // Notifications in flight sit above claims: to the customer they are the
+  // same thing at an earlier stage, and hiding them looks like nothing happened.
+  const [data, fnolData] = await Promise.all([
+    api("GET", "/claims"),
+    api("GET", "/fnol").catch(() => ({ notifications: [] })),
+  ]);
+  claimsCache = data.claims || [];
+  fnolCache = (fnolData.notifications || []).filter(n => n.status !== "REGISTERED");
+
+  if (!claimsCache.length && !fnolCache.length) {
+    host.innerHTML = `<div class="empty"><div class="big">📋</div>You don't have any claims on file yet.
+      <div class="tiny" style="margin-top:8px;">Ask the assistant to start one whenever you're ready.</div></div>`;
+    return;
+  }
+
+  host.innerHTML = "";
+
+  if (fnolCache.length) {
+    const section = el("div", { style: "margin-bottom:20px;" });
+    section.append(el("h3", { style: "margin-bottom:10px;" }, "Being set up"));
+    section.append(el("p", { class: "muted", style: "margin-bottom:12px;font-size:.85rem;" },
+      "These aren't claims yet — our team is checking the details before they're registered."));
+    fnolCache.forEach(n => section.append(fnolStatusCard(n)));
+    host.append(section);
+    if (claimsCache.length) host.append(el("h3", { style: "margin:22px 0 10px;" }, "Your claims"));
+  }
+  claimsCache.forEach((claim, index) => {
+    const outstanding = (claim.checklist || {}).outstanding_mandatory || [];
+    const card = el("div", { class: "claim-card" + (index === 0 ? " open" : "") });
+    card.innerHTML = `
+      <div class="claim-top">
+        <span class="caret">›</span>
+        <div class="grow">
+          <div class="claim-title">${esc(claim.claim_number)} · ${esc(titleCase(claim.claim_type))}</div>
+          <div class="claim-sub">${esc(claim.status_meaning || "")}</div>
+        </div>
+        ${outstanding.length ? `<span class="badge b-amber">⚠️ ${outstanding.length} needed</span>` : ""}
+        ${statusBadge(claim.status)}
+      </div>
+      <div class="claim-body ${index === 0 ? "" : "hidden"}">
+        <div class="metrics" style="margin:16px 0;">
+          <div class="metric"><div class="label">Claimed</div><div class="value">${money(claim.claimed_amount)}</div></div>
+          <div class="metric"><div class="label">Approved</div><div class="value">${money(claim.approved_amount)}</div></div>
+          <div class="metric"><div class="label">Incident</div><div class="value">${esc(claim.incident_date || "—")}</div></div>
+        </div>
+        <div class="detail-slot"><div class="skel" style="width:50%"></div></div>
+      </div>`;
+
+    const top = card.querySelector(".claim-top");
+    const body = card.querySelector(".claim-body");
+    top.addEventListener("click", () => {
+      card.classList.toggle("open");
+      body.classList.toggle("hidden");
+      if (card.classList.contains("open")) loadClaimDetail(claim, card);
+    });
+    host.append(card);
+    if (index === 0) loadClaimDetail(claim, card);
+  });
+}
+
+async function loadClaimDetail(claim, card) {
+  const slot = card.querySelector(".detail-slot");
+  if (slot.dataset.loaded) return;
+  slot.dataset.loaded = "1";
+
+  const detail = await api("GET", `/claims/${claim.id}`);
+  const outstanding = (claim.checklist || {}).outstanding_mandatory || [];
+  slot.innerHTML = "";
+
+  const timeline = el("div", { class: "card card-tight" });
+  timeline.innerHTML = timelineCard({
+    claim_number: claim.claim_number,
+    status: claim.status,
+    status_meaning: claim.status_meaning || "",
+    history: (detail.history || []).map(h => ({ status: h.to_status, date: (h.changed_at || "").slice(0, 10) })),
+    prediction: detail.prediction,
+    outstanding_documents: outstanding,
+  });
+  slot.append(timeline);
+
+  const checklist = el("div", { class: "card card-tight" });
+  checklist.innerHTML = checklistCard({ ...(detail.checklist || {}), claim_number: claim.claim_number });
+  slot.append(checklist);
+
+  for (const document_ of detail.documents || []) {
+    if (!document_.rejection_payload) continue;
+    if (document_.superseded) {
+      // Already covered by an accepted document of the same type — show it for
+      // transparency, but don't alarm anyone.
+      const label = humanise(document_.doc_type || "document");
+      const node = el("details", { class: "disclose" });
+      node.innerHTML = `<summary>ℹ️ A ${esc(label)} you sent couldn't be accepted — no action needed</summary>
+        <div class="body">${alertBox("info", "You don't need to do anything about this one. We already have an accepted version on file.")}
+        <p>${md(document_.rejection_payload.plain_explanation || "")}</p></div>`;
+      slot.append(node);
+    } else {
+      slot.append(rejectionCard(document_.rejection_payload, document_.id));
+    }
+  }
+}
+
+// ---------------------------------------------------------------- boot
+// Loaded up front so the chat's poll knows whether anything is pending.
+api("GET", "/fnol")
+  .then(d => { fnolCache = (d.notifications || []).filter(n => n.status !== "REGISTERED"); })
+  .catch(() => { fnolCache = []; });
+
+startConversation().catch(error => {
+  thread.innerHTML = alertBox("error", esc(error.message));
+});
+</script>
+</body>
+</html>

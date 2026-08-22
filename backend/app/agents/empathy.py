@@ -20,6 +20,12 @@ def run(state: GraphState) -> GraphState:
         state.reply = state.draft
         return state
 
+    # Intake questions are exact by design and are paired with a card that
+    # repeats them. Re-voicing would drift the wording away from the card and
+    # risk asking for something subtly different from what we then store.
+    if state.intent == "new_claim" and state.reply:
+        return state
+
     fallback = _template(state)
     result = gateway.complete(
         "empathy_responder",
@@ -57,24 +63,26 @@ def _template(state: GraphState) -> str:
         review_line = (
             f" {who} in our claims team is looking at this for you"
             if who else " A colleague is looking at this for you"
-        ) + f" (reference {review.get('ticket_reference')}); I'll bring their answer here."
+        ) + f" (you can quote {review.get('ticket_reference')}); I'll bring their answer here."
 
-    if state.intent == "human_request" and facts.get("escalation"):
-        esc = facts["escalation"]
-        if esc.get("already_open"):
-            who = esc.get("assigned_to")
+    if state.intent == "human_request" and facts.get("colleague_asked"):
+        asked = facts["colleague_asked"]
+        reference = asked.get("reference_the_customer_can_quote")
+        if asked.get("already_being_looked_at"):
+            who = asked.get("who_has_it")
             owner = f"{who} is" if who else "A colleague is"
             return (
-                f"{owner} already on this for you — I raised it on "
-                f"{esc.get('raised_at')} under reference {esc['ticket_reference']}, and "
-                f"I've just flagged that you've chased it. I'll bring their answer "
-                f"straight back to you here. Anything you'd like me to add for them?"
+                f"{owner} already looking at this for you — I passed it on on "
+                f"{asked.get('asked_on')}, and I've just let them know you've "
+                f"asked again. I'll bring their answer straight back to you here. "
+                f"Anything you'd like me to add for them?"
             )
         return (
-            f"Of course — I've taken this to our claims team for you. Your reference is "
-            f"{esc['ticket_reference']} and I'll have an answer back to you "
-            f"{esc['eta']}. You won't need to chase anyone; I'll bring it here. "
-            f"Is there anything you'd like me to add to the note for them?"
+            f"Of course — I've asked a colleague to pick this up for you. If you "
+            f"need to quote anything it's {reference}, and they'll be in touch "
+            f"{asked.get('when_they_will_be_in_touch')}. You won't need to chase "
+            f"anyone; I'll bring their answer here. Is there anything you'd like "
+            f"me to add for them?"
         )
 
     if facts.get("lookup_failed"):
@@ -94,10 +102,10 @@ def _template(state: GraphState) -> str:
     if state.intent == "claim_status" and facts.get("claim"):
         claim = facts["claim"]
         meaning = facts.get("current_stage_meaning", "")
-        parts = [
-            f"{greeting}your claim {claim['claim_number']} is currently at "
-            f"\"{claim['status'].replace('_', ' ').title()}\". {meaning}".strip()
-        ]
+        # The stage sentence says where the claim is; naming the stage as well
+        # was the same fact twice, and read oddly once one stage could mean two
+        # different things.
+        parts = [f"{greeting}about your claim {claim['claim_number']}: {meaning}".strip()]
         if late := facts.get("running_late"):
             parts.insert(0, (
                 f"I want to be straight with you: this claim has been at this stage for "
@@ -122,7 +130,7 @@ def _template(state: GraphState) -> str:
         return " ".join(parts)
 
     if state.intent == "documents" and facts.get("checklist"):
-        outstanding = facts.get("outstanding_mandatory", [])
+        outstanding = facts.get("documents_we_need_from_you", [])
         if not outstanding:
             message = (
                 f"{greeting}good news — every document we need for claim "
@@ -141,9 +149,13 @@ def _template(state: GraphState) -> str:
             return message
         pretty = ", ".join(d.replace("_", " ") for d in outstanding)
         lines = [f"{greeting}for claim {facts['claim_number']} I still need: {pretty}."]
+        # Read from the source, not the facts block: guidance is deliberately
+        # kept out of what the model sees so replies don't repeat the card.
+        from app.agents.document import GUIDANCE
+
         for doc_type in outstanding[:2]:
-            if guidance := facts.get("guidance", {}).get(doc_type):
-                lines.append(f"{doc_type.replace('_', ' ').capitalize()}: {guidance}")
+            if guidance := GUIDANCE.get(doc_type.replace(" ", "_")):
+                lines.append(f"{doc_type.capitalize()}: {guidance}")
         lines.append("Upload them here and I'll check each one straight away.")
         return " ".join(lines)
 

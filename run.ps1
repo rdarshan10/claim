@@ -14,28 +14,35 @@ param(
     [switch]$Stop,
     [switch]$Evals,
     [switch]$NoLlm,
-    [int]$ApiPort = 8010,
-    [int]$UiPort  = 8501
+    [int]$ApiPort = 8010
 )
 
 $ErrorActionPreference = "Stop"
 $Root   = $PSScriptRoot
-$Python = Join-Path $Root "..\.venv\Scripts\python.exe"
-
-if (-not (Test-Path $Python)) {
-    Write-Host "Can't find the virtualenv at $Python" -ForegroundColor Red
+# Prefer a local venv, then a sibling one, then whatever python is on PATH.
+$Python = $null
+foreach ($candidate in @((Join-Path $Root ".venv\Scripts\python.exe"),
+                         (Join-Path $Root "..\.venv\Scripts\python.exe"))) {
+    if (Test-Path $candidate) { $Python = $candidate; break }
+}
+if (-not $Python) {
+    $onPath = Get-Command python -ErrorAction SilentlyContinue
+    if ($onPath) { $Python = $onPath.Source }
+}
+if (-not $Python) {
+    Write-Host "No Python found (looked for .venv, ..\.venv, then PATH)." -ForegroundColor Red
     exit 1
 }
+Write-Host "Using Python: $Python" -ForegroundColor DarkGray
 
 $env:PYTHONPATH = "$Root\backend;$Root"
-$env:CLAIMCOMPANION_API = "http://127.0.0.1:$ApiPort/api/v1"
 if ($NoLlm) { $env:LLM_ENABLED = "false" } else { $env:LLM_ENABLED = "true" }
 
 function Stop-Services {
     $killed = 0
     Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
         Where-Object { $_.CommandLine -like "*uvicorn*app.main*" -or
-                       $_.CommandLine -like "*streamlit*frontend/app.py*" } |
+                       $_.CommandLine -like "*streamlit*frontend*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force; $killed++ }
     Write-Host "Stopped $killed process(es)." -ForegroundColor Yellow
 }
@@ -82,20 +89,12 @@ if (-not (Wait-For "http://127.0.0.1:$ApiPort/health" "API")) {
     exit 1
 }
 
-Write-Host "`nStarting the UI on :$UiPort ..." -ForegroundColor Cyan
-Start-Process -FilePath $Python `
-    -ArgumentList "-m", "streamlit", "run", "frontend/app.py",
-                  "--server.port", "$UiPort", "--server.headless", "true" `
-    -WorkingDirectory $Root -NoNewWindow `
-    -RedirectStandardOutput "$env:TEMP\cc_ui.log" -RedirectStandardError "$env:TEMP\cc_ui_err.log"
-
-Wait-For "http://127.0.0.1:$UiPort/_stcore/health" "UI" | Out-Null
-
 # ---------------------------------------------------------------- summary
 Write-Host ""
 Write-Host "  ClaimCompanion is running" -ForegroundColor Green
 Write-Host "  ------------------------------------------------------------"
-Write-Host "  Portal      http://localhost:$UiPort"
+Write-Host "  Portal      http://127.0.0.1:$ApiPort/"
+Write-Host "  Staff       http://127.0.0.1:$ApiPort/staff"
 Write-Host "  API docs    http://127.0.0.1:$ApiPort/docs"
 if ($NoLlm) {
     Write-Host "  LLM         DISABLED - template mode" -ForegroundColor Yellow
@@ -105,6 +104,6 @@ Write-Host "  Customer    priya@example.com      code 000000"
 Write-Host "  Reviewer    agent.marcus           code 000000   (Staff tab)"
 Write-Host "  Manager     manager.elena          code 000000   (Staff tab)"
 Write-Host ""
-Write-Host "  Logs        $env:TEMP\cc_api_err.log / cc_ui_err.log"
+Write-Host "  Logs        $env:TEMP\cc_api_err.log"
 Write-Host "  Stop        .\run.ps1 -Stop"
 Write-Host ""

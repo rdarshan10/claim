@@ -13,6 +13,19 @@ from app.guardrails.input_guards import wrap_untrusted
 from app.llm import gateway
 
 INTENT_SIGNALS: dict[str, list[str]] = {
+    # Checked before claim_status: "my claim" appears in both "make a claim" and
+    # "where is my claim", and dict order decides ties in _heuristic_intent.
+    "new_claim": [
+        r"\b(?:make|file|start|open|raise|submit|register|lodge)\s+(?:a|an|my|new)?\s*claim\b",
+        r"\bnew claim\b", r"\bclaim for\b",
+        r"\b(?:want|need|would like) to claim\b",
+        r"\breport (?:an? )?(?:incident|loss|accident|theft|break-?in)\b",
+        r"\b(?:had|been in|was in) (?:an? )?(?:accident|crash|collision|prang)\b",
+        r"\bi (?:crashed|reversed into|bumped|scraped)\b",
+        r"\b(?:was|got|been) (?:stolen|burgled|broken into|vandalised|vandalized)\b",
+        r"\bburst pipe\b", r"\bwater damage\b", r"\bflood(?:ed|ing)?\b",
+        r"\bfire damage\b", r"\bstorm damage\b", r"\bwrite[- ]?off\b",
+    ],
     "human_request": [
         r"\b(?:talk|speak|chat) to (?:a |an )?(?:human|person|agent|someone|advisor)\b",
         r"\breal person\b", r"\bcall me\b", r"\bcomplain(?:t|ing)?\b",

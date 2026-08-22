@@ -16,8 +16,11 @@ router = APIRouter(prefix="/claims", tags=["claims"])
 async def list_claims(principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     claims = repo.get_claims(principal.customer_id)
     for claim in claims:
-        claim["status_meaning"] = timeline_prediction.STAGE_MEANING.get(claim["status"], "")
-        claim["checklist"] = repo.checklist(claim["id"], principal.customer_id)
+        checklist = repo.checklist(claim["id"], principal.customer_id)
+        claim["checklist"] = checklist
+        # DOCS_PENDING reads differently depending on who is holding it.
+        claim["status_meaning"] = timeline_prediction.stage_meaning(
+            claim["status"], awaiting_customer=bool(checklist["awaiting_customer"]))
     return {"claims": claims}
 
 
@@ -30,12 +33,17 @@ async def get_claim(claim_id: str,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Claim not found")
 
     history = repo.get_status_history(claim_id, principal.customer_id)
+    checklist = repo.checklist(claim_id, principal.customer_id)
+    # Whether the customer still owes us paperwork changes both the wording and
+    # the estimate, so it is resolved once and used for both.
+    awaiting = bool(checklist["awaiting_customer"])
     return {
         **claim,
-        "status_meaning": timeline_prediction.STAGE_MEANING.get(claim["status"], ""),
+        "status_meaning": timeline_prediction.stage_meaning(
+            claim["status"], awaiting_customer=awaiting),
         "history": history,
-        "prediction": timeline_prediction.predict(claim, history),
-        "checklist": repo.checklist(claim_id, principal.customer_id),
+        "prediction": timeline_prediction.predict(claim, history, awaiting_customer=awaiting),
+        "checklist": checklist,
         "documents": repo.get_documents(claim_id, principal.customer_id),
     }
 

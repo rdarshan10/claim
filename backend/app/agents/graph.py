@@ -14,14 +14,18 @@ from __future__ import annotations
 
 import re
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Callable
 
-from app.agents import claim_status, document, empathy, escalation, knowledge, supervisor
+from app.agents import (claim_status, document, empathy, escalation, fnol_agent,
+                        knowledge, supervisor)
 from app.agents.state import GraphState
 from app.audit import logger as audit
+from app.db import execute, query_one
 from app.guardrails import input_guards, output_guards
 
 AGENTS: dict[str, Callable[[GraphState], GraphState]] = {
+    "new_claim": fnol_agent.run,
     "claim_status": claim_status.run,
     "documents": document.run,
     "knowledge": knowledge.run,
@@ -111,6 +115,29 @@ def run_turn(
         trace_id=state.trace_id,
     )
 
+    # --- node: notification of loss -------------------------------------
+    # Three deterministic overrides the classifier must not undo:
+    #   * a bare "yes" to an offer of a colleague is accepting that offer,
+    #   * an unambiguous "I want to make a claim" is new_claim regardless of
+    #     what the model said, and
+    #   * once an intake is open, the customer's next message is almost always
+    #     the answer to the question just asked. "Yesterday" or "£400" carries
+    #     no intent signal at all and would otherwise route to knowledge.
+    # "Yes" after we offered a colleague is an answer to that question, not a
+    # new topic. Checked first: an open intake must not swallow it, or the
+    # customer accepts the offer and gets asked for their incident date.
+    if _accepted_offer(state):
+        state.intent = "human_request"  # type: ignore[assignment]
+        state.intent_confidence = 1.0
+    elif fnol_agent.wants_to_start(message):
+        state.intent = "new_claim"  # type: ignore[assignment]
+        state.intent_confidence = max(state.intent_confidence, 0.9)
+    elif state.intent not in ("human_request", "out_of_scope"):
+        from app.fnol import intake as _intake
+
+        if _intake.open_for_customer(customer_id):
+            state.intent = "new_claim"  # type: ignore[assignment]
+
     # --- node: keep an open case current --------------------------------
     # Whatever they asked about, if a colleague is working their case the
     # reviewer needs the customer's latest words and mood. "Why is this taking
@@ -119,7 +146,6 @@ def run_turn(
         try:
             ticket = escalation.load_ticket(handoff["ticket_id"])
             if ticket:
-                ticket = escalation.escalate_priority_if_needed(state, ticket)
                 escalation.touch_case(state, ticket,
                                       chased=state.intent == "human_request")
         except Exception as exc:  # noqa: BLE001 - never fail a reply over this
@@ -149,6 +175,24 @@ def run_turn(
         else:
             agent(state)
 
+    # --- node: offer a person (never decide for them) --------------------
+    # Frustration is a reason to *ask* whether they want a colleague, not to
+    # open a case on their behalf. Only when nothing is already open, and only
+    # when they haven't just asked for one — that path escalates for real.
+    if (state.sentiment in ("frustrated", "confused")
+            and state.intent not in ("human_request", "out_of_scope", "new_claim")
+            and not handoff
+            and not state.escalation_ticket_id):
+        state.cards.append({
+            "card_type": "offer_human",
+            "payload": {
+                "reason": "sounds frustrating" if state.sentiment == "frustrated"
+                          else "not straightforward",
+            },
+        })
+        # Remember we asked, so their answer means something next turn.
+        _mark_offer(state)
+
     # --- node: empathy responder ----------------------------------------
     # If a colleague is already on the case, that is a fact the customer is
     # entitled to, so it joins the verified set rather than being hidden.
@@ -163,7 +207,12 @@ def run_turn(
     # --- node: output guardrails ----------------------------------------
     grounding_source = {"facts": state.facts, "citations": state.citations,
                         "customer_name": state.customer_name}
-    check = output_guards.check_output(state.reply, grounding_source)
+    # Intake turns ask questions rather than asserting anything about a claim,
+    # so there are no facts to ground them against. The text is ours, not the
+    # model's, which is what the guardrail exists to police.
+    check = (output_guards.OutputVerdict()
+             if state.intent == "new_claim"
+             else output_guards.check_output(state.reply, grounding_source))
 
     if not check.passed:
         state.guardrail_flags.append("output_guard_fail")
@@ -253,3 +302,41 @@ def _audit_turn(state: GraphState) -> None:
         entity_type="conversation", entity_id=state.conversation_id,
         payload=state.to_audit(), trace_id=state.trace_id,
     )
+
+
+# Short, unambiguous acceptances. Anything longer is treated as a real message:
+# "yes, and my policy number is 123" carries content that must still be routed.
+_AFFIRMATIVES = {
+    "yes", "y", "yeah", "yep", "yes please", "please", "please do", "ok", "okay",
+    "sure", "go ahead", "do that", "we can do that", "that would be fine",
+    "that would be good", "that works", "fine", "alright", "sounds good",
+    "if you could", "if you would", "i would", "id like that", "i'd like that",
+}
+
+
+def _mark_offer(state: GraphState) -> None:
+    """Record that we offered to fetch a colleague on this turn."""
+    if not state.conversation_id:
+        return
+    execute("UPDATE conversation SET offered_human_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), state.conversation_id))
+
+
+def _accepted_offer(state: GraphState) -> bool:
+    """True when this turn is a bare 'yes' to an offer made on the last one.
+
+    The offer is cleared whether or not they accepted: it stands for exactly one
+    turn, so a 'yes' to something else later never re-triggers it.
+    """
+    if not state.conversation_id:
+        return False
+    row = query_one("SELECT offered_human_at FROM conversation WHERE id = ?",
+                    (state.conversation_id,))
+    if not row or not row["offered_human_at"]:
+        return False
+
+    execute("UPDATE conversation SET offered_human_at = NULL WHERE id = ?",
+            (state.conversation_id,))
+
+    cleaned = state.message.strip().lower().rstrip(".!").strip()
+    return cleaned in _AFFIRMATIVES

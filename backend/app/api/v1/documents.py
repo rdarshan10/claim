@@ -96,7 +96,10 @@ async def annotated_image(doc_id: str,
     """The annotated page image with the problem boxed (§11.8)."""
     from app.documents import annotator
 
-    document = repo.get_document(doc_id, principal.customer_id)
+    # Staff review other people's documents by definition, so the customer
+    # ownership filter cannot apply to them. Customers stay scoped as before.
+    staff = principal.role in ("agent", "manager")
+    document = repo.get_document(doc_id, None if staff else principal.customer_id)
     if document is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
 

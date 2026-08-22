@@ -10,28 +10,19 @@ from app.audit import logger as audit
 from app.db import execute
 from app.repositories import claims as repo
 
-PRIORITY_BY_SENTIMENT = {
-    "distressed": "URGENT",
-    "frustrated": "HIGH",
-    "confused": "NORMAL",
-    "calm": "NORMAL",
-}
-
-
 def run(state: GraphState, reason: str = "Customer requested a human") -> GraphState:
-    priority = PRIORITY_BY_SENTIMENT.get(state.sentiment, "NORMAL")
 
-    # Asking twice must not open a second ticket — it should reassure and bump
-    # priority if the customer has become more distressed. Scoped to the
-    # customer, not the conversation: a case belongs to the person, so starting
-    # a fresh chat and asking again is still the same case.
+    # Asking twice must not open a second ticket — it should reassure and keep
+    # the reviewer's context current. Scoped to the customer, not the
+    # conversation: a case belongs to the person, so starting a fresh chat and
+    # asking again is still the same case.
     from app.repositories import conversations as conv_repo
 
     if existing := conv_repo.open_ticket_for_customer(state.customer_id):
         # The ticket keeps pointing at the conversation that raised it — that's
         # where the reviewer finds the context. Replies are delivered to
         # whichever thread the customer is using now, resolved at send time.
-        return _reassure(state, existing, priority)
+        return _reassure(state, existing)
 
     claims = repo.get_claims(state.customer_id)
     claim = None
@@ -65,14 +56,13 @@ def run(state: GraphState, reason: str = "Customer requested a human") -> GraphS
             context_packet, status, created_at)
            VALUES (?,?,?,?,?,?,?, 'OPEN', ?)""",
         (ticket_id, state.conversation_id or None, claim["id"] if claim else None,
-         state.customer_id, priority, reason, json.dumps(context_packet, default=str),
+         state.customer_id, "NORMAL", reason, json.dumps(context_packet, default=str),
          datetime.now(timezone.utc).isoformat()),
     )
 
     audit.record("escalation_created", actor_type="agent", actor_id="escalation",
                  entity_type="ticket", entity_id=ticket_id,
-                 payload={"priority": priority, "reason": reason,
-                          "sentiment": state.sentiment},
+                 payload={"reason": reason, "sentiment": state.sentiment},
                  trace_id=state.trace_id)
 
     # Pause the assistant: the conversation now waits on a person (§9 interrupt).
@@ -83,24 +73,22 @@ def run(state: GraphState, reason: str = "Customer requested a human") -> GraphS
                            ticket_id=ticket_id)
 
     state.escalation_ticket_id = ticket_id
-    eta = "within 2 hours" if priority == "URGENT" else "within 1 working day"
+    eta = "within 1 working day"
     state.facts = {
-        "escalation": {
-            "ticket_reference": ticket_id[:8].upper(),
-            "priority": priority,
-            "eta": eta,
-            "reason": reason,
+        "colleague_asked": {
+            "reference_the_customer_can_quote": ticket_id[:8].upper(),
+            "when_they_will_be_in_touch": eta,
+            "note": ("Say a colleague will pick this up and give the reference. "
+                     "Do not call it an escalation, a ticket or a case — to the "
+                     "customer this is simply someone getting back to them."),
         },
         "claim": context_packet["claim_snapshot"],
     }
     state.cards.append({
         "card_type": "handoff",
-        "payload": {"ticket_id": ticket_id[:8].upper(), "priority": priority, "eta": eta},
+        "payload": {"ticket_id": ticket_id[:8].upper(), "eta": eta},
     })
     return state
-
-
-PRIORITY_RANK = {"NORMAL": 0, "HIGH": 1, "URGENT": 2}
 
 
 def load_ticket(ticket_id: str) -> dict | None:
@@ -157,44 +145,27 @@ def touch_case(state: GraphState, ticket: dict, *, chased: bool = False) -> dict
     return packet
 
 
-def escalate_priority_if_needed(state: GraphState, ticket: dict) -> dict:
-    """Raise an open case's priority when the customer's mood worsens."""
-    priority = PRIORITY_BY_SENTIMENT.get(state.sentiment, "NORMAL")
-    if PRIORITY_RANK.get(priority, 0) <= PRIORITY_RANK.get(ticket["priority"], 0):
-        return ticket
-
-    execute("UPDATE escalation_ticket SET priority = ? WHERE id = ?",
-            (priority, ticket["id"]))
-    audit.record("escalation_priority_raised", actor_type="agent",
-                 actor_id="escalation", entity_type="ticket", entity_id=ticket["id"],
-                 payload={"from": ticket["priority"], "to": priority,
-                          "sentiment": state.sentiment},
-                 trace_id=state.trace_id)
-    return {**ticket, "priority": priority}
-
-
-def _reassure(state: GraphState, ticket: dict, priority: str) -> GraphState:
+def _reassure(state: GraphState, ticket: dict) -> GraphState:
     """A case is already open: chase it rather than duplicating it."""
     ticket_id = ticket["id"]
-    ticket = escalate_priority_if_needed(state, ticket)
     touch_case(state, ticket, chased=True)
 
     assigned = ticket.get("assigned_to")
     state.escalation_ticket_id = ticket_id
     state.facts = {
-        "escalation": {
-            "ticket_reference": ticket_id[:8].upper(),
-            "priority": ticket["priority"],
-            "already_open": True,
-            "assigned_to": assigned,
-            "raised_at": (ticket.get("created_at") or "")[:10],
-            "note": ("A colleague is already on this case. Reassure the customer, "
-                     "confirm it is being chased, and do not promise a new time."),
+        "colleague_asked": {
+            "reference_the_customer_can_quote": ticket_id[:8].upper(),
+            "already_being_looked_at": True,
+            "who_has_it": assigned,
+            "asked_on": (ticket.get("created_at") or "")[:10],
+            "note": ("A colleague is already on this. Reassure them, confirm it is "
+                     "being chased, and do not promise a new time. Do not call it "
+                     "an escalation, a ticket or a case."),
         }
     }
     state.cards.append({
         "card_type": "handoff_status",
-        "payload": {"ticket_id": ticket_id[:8].upper(), "priority": ticket["priority"],
+        "payload": {"ticket_id": ticket_id[:8].upper(),
                     "assigned_to": assigned, "status": ticket.get("status")},
     })
     return state

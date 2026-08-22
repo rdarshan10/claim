@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oversight · ClaimCompanion</title>
+<link rel="stylesheet" href="/static/css/app.css">
+<style>
+
+/* The console is a working surface, not a brochure: tighter type, tighter
+   spacing, monospace figures. Same tokens as the portal, higher density. */
+body { font-size: 14px; }
+.container-wide h2 { font-size: 1.06rem; }
+
+.case-layout { display: grid; grid-template-columns: 268px minmax(0, 1fr) 380px; gap: 14px; align-items: start; }
+@media (max-width: 1400px) { .case-layout { grid-template-columns: 240px minmax(0, 1fr); } .case-tools { grid-column: 1 / -1; } }
+@media (max-width: 980px) { .case-layout { grid-template-columns: 1fr; } }
+
+.panel-box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+             box-shadow: var(--shadow-sm); overflow: hidden; }
+.panel-box > header { padding: 9px 13px; border-bottom: 1px solid var(--line); background: var(--surface-2);
+                      font-size: .79rem; font-weight: 640; text-transform: uppercase;
+                      letter-spacing: .05em; color: var(--ink-3); display: flex; align-items: center; gap: 8px; }
+.panel-box > .inner { padding: 13px; }
+
+/* case list */
+.case-list { max-height: calc(100vh - 190px); overflow-y: auto; }
+.case-row { padding: 10px 12px; border-bottom: 1px solid var(--line); cursor: pointer; transition: background .1s; }
+.case-row:hover { background: var(--surface-2); }
+.case-row.active { background: var(--indigo-50); box-shadow: inset 3px 0 0 var(--indigo-600); }
+.case-row .who { display: block; text-align: left; font-weight: 600; font-size: .87rem; color: var(--ink); }
+.case-row .meta { font-size: .74rem; color: var(--ink-3); margin-top: 2px; font-family: var(--mono); }
+
+/* conversation transcript */
+.transcript { max-height: 430px; overflow-y: auto; padding: 4px 2px; }
+.t-msg { margin-bottom: 11px; }
+.t-head { font-size: .74rem; color: var(--ink-3); margin-bottom: 3px; display: flex; gap: 7px; align-items: center; }
+.t-head b { color: var(--ink-2); font-weight: 620; }
+.t-head svg { width: 12px; height: 12px; color: var(--navy-800); flex-shrink: 0; }
+/* The transcript scrolls to the bottom on open; padding keeps the first visible
+   line off the container edge instead of clipped against it. */
+.transcript { padding-top: 10px; }
+.t-body { padding: 8px 11px; border-radius: var(--r-sm); font-size: .855rem; line-height: 1.55;
+          border-left: 2px solid var(--line-2); background: var(--surface-2); }
+.t-msg.user .t-body { border-left-color: var(--indigo-500); background: var(--indigo-50); }
+.t-sep { font-size: .72rem; color: var(--ink-4); text-transform: uppercase; letter-spacing: .05em;
+         border-top: 1px solid var(--line); margin: 14px 0 9px; padding-top: 7px; }
+
+/* doc tabs */
+.subtabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 11px; }
+.subtab { appearance: none; border: 0; background: none; font: inherit; font-size: .8rem; font-weight: 560;
+          padding: 6px 10px; color: var(--ink-3); cursor: pointer; border-bottom: 2px solid transparent; }
+.subtab.active { color: var(--indigo-600); border-bottom-color: var(--indigo-600); }
+.subpanel { display: none; } .subpanel.active { display: block; }
+
+.rule { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; font-size: .83rem;
+        border-bottom: 1px dashed var(--line); }
+.rule:last-child { border-bottom: 0; }
+.rule .rid { font-family: var(--mono); font-size: .78rem; font-weight: 500; }
+
+/* audit */
+.audit-row { display: grid; grid-template-columns: 148px 1fr; gap: 11px; padding: 7px 0;
+             border-bottom: 1px solid var(--line); font-size: .82rem; align-items: baseline; }
+.audit-row .ts { font-family: var(--mono); font-size: .76rem; color: var(--ink-4); }
+.chain-ok { color: var(--green); font-weight: 600; }
+
+table.data { width: 100%; border-collapse: collapse; font-size: .82rem; }
+table.data th { text-align: left; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+                color: var(--ink-4); padding: 7px 9px; border-bottom: 1px solid var(--line-2); font-weight: 620; }
+table.data td { padding: 7px 9px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+table.data tr:hover td { background: var(--surface-2); }
+table.data td.num { text-align: right; font-family: var(--mono); font-size: .79rem; }
+/* Headers over numeric columns were left-aligned while their cells were right-
+   aligned, so every figure sat under the wrong label. */
+table.data th.num { text-align: right; }
+
+/* ------------------------------------------------------------ admin view */
+.kpi-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+           gap: 11px; margin-bottom: 14px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r);
+       padding: 13px 15px; box-shadow: var(--shadow-sm); }
+.kpi-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+             color: var(--ink-4); font-weight: 620; }
+.kpi-value { font-size: 1.65rem; font-weight: 680; color: var(--ink);
+             margin: 5px 0 3px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.kpi-sub { font-size: .74rem; color: var(--ink-3); line-height: 1.35; }
+
+.admin-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+              gap: 12px; align-items: start; }
+
+/* The arithmetic behind each headline. Deliberately plain: this is the table a
+   sceptical reader checks, so it reads like a worked sum rather than a chart. */
+table.calc { width: 100%; border-collapse: collapse; font-size: .82rem; }
+table.calc td { padding: 6px 0; color: var(--ink-2); }
+table.calc td.num { text-align: right; font-family: var(--mono);
+                    font-variant-numeric: tabular-nums; color: var(--ink); }
+table.calc tr.sep td { border-top: 1px solid var(--line); padding-top: 9px; }
+table.calc tr.tot td { border-top: 2px solid var(--line-2); padding-top: 9px;
+                       font-weight: 680; color: var(--ink); }
+
+</style>
+</head>
+<body>
+
+<div id="header-slot"></div>
+
+<nav class="tabbar">
+  <button class="tab active" data-panel="admin">AI cost</button>
+  <button class="tab" data-panel="metrics">AI quality</button>
+  <button class="tab" data-panel="audit">Audit trail</button>
+  <a class="tab tab-link" href="/staff">← Back to the console</a>
+</nav>
+
+<div class="container-wide">
+  <section class="panel active" id="panel-admin"><div id="admin-body"></div></section>
+  <section class="panel" id="panel-metrics"><div id="metrics-body"></div></section>
+  <section class="panel" id="panel-audit"><div id="audit-body"></div></section>
+</div>
+
+<script type="module">
+import { api, session, esc, money, pct, humanise, titleCase,
+         requireAuth, mountHeader, wireHeader, toast, alertBox, withBusy, el }
+  from "/static/js/api.js";
+import { confidenceMetrics, jsonBlock } from "/static/js/cards.js";
+
+// Oversight is a manager's view of the whole operation. Agents are bounced
+// rather than shown three empty panels.
+if (!requireAuth("agent", "manager")) throw new Error("redirecting");
+const isManager = session.role === "manager";
+
+document.getElementById("header-slot").innerHTML = mountHeader("Oversight");
+wireHeader();
+
+const loaded = {};
+document.querySelectorAll(".tab[data-panel]").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".tab[data-panel]").forEach(t =>
+      t.classList.toggle("active", t === tab));
+    document.querySelectorAll(".panel").forEach(p =>
+      p.classList.toggle("active", p.id === `panel-${tab.dataset.panel}`));
+    const view = tab.dataset.panel;
+    if (!loaded[view]) { loaded[view] = true; VIEWS[view](); }
+  });
+});
+
+async function loadAdmin() {
+  const host = document.getElementById("admin-body");
+  if (!isManager) {
+    host.innerHTML = alertBox("info", "The admin view is available to managers.");
+    return;
+  }
+  host.innerHTML = '<div class="skel" style="width:46%"></div>';
+  const d = await api("GET", "/admin/overview");
+  const { spend, unit_cost: unit, activity } = d;
+
+  const num = n => Number(n || 0).toLocaleString();
+  // Real spend here is fractions of a penny; £0.00 reads as broken.
+  const money = g => g < 0.01 ? `${(g * 100).toFixed(2)}p`
+    : "£" + Number(g).toLocaleString(undefined,
+        { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const card = (label, value, sub) => `
+    <div class="kpi">
+      <div class="kpi-label">${label}</div>
+      <div class="kpi-value">${value}</div>
+      <div class="kpi-sub">${sub}</div>
+    </div>`;
+
+  host.innerHTML = `
+    <div class="row-between" style="margin-bottom:14px;">
+      <div>
+        <h2>What the AI costs to run</h2>
+        <div class="tiny">Every figure is a metered call priced at the
+          provider's published per-token rate. Nothing here is estimated except
+          where it says so.</div>
+      </div>
+    </div>
+
+    <div class="kpi-row">
+      ${card("Spend to date", money(spend.gbp),
+             `${num(spend.llm_calls)} call(s) · ${num(spend.tokens_in + spend.tokens_out)} tokens`)}
+      ${card("Cost per customer turn", money(unit.gbp_per_turn),
+             `measured over ${num(unit.turns_measured)} turn(s)`)}
+      ${card("Cost per contact", money(unit.gbp_per_contact),
+             `at ${unit.turns_per_contact} turns per contact`)}
+      ${card("Saved by caching", money(spend.cache_saved_gbp),
+             `${num(spend.cache_hits)} answer(s) served from cache`)}
+    </div>
+
+    <div class="admin-grid">
+      <div class="panel-box">
+        <header>The spend, in full</header>
+        <div class="inner">
+          <table class="calc">
+            <tr><td>Model calls</td><td class="num">${num(spend.llm_calls)}</td></tr>
+            ${spend.failed_calls ? `<tr><td>…of which failed</td>
+              <td class="num">${num(spend.failed_calls)}</td></tr>` : ""}
+            <tr><td>Served from cache</td><td class="num">${num(spend.cache_hits)}</td></tr>
+            <tr><td>Cache hit rate</td>
+                <td class="num">${spend.cache_hit_rate === null ? "—"
+                  : Math.round(spend.cache_hit_rate * 100) + "%"}</td></tr>
+            <tr class="sep"><td>Tokens in</td><td class="num">${num(spend.tokens_in)}</td></tr>
+            <tr><td>Tokens out</td><td class="num">${num(spend.tokens_out)}</td></tr>
+            <tr class="tot"><td>Spend</td>
+                <td class="num">$${(spend.usd || 0).toFixed(4)} · ${money(spend.gbp)}</td></tr>
+          </table>
+          <div class="tiny" style="margin-top:10px;">
+            ${spend.fully_priced
+              ? "Priced at the providers' published per-token rates."
+              : "⚠ Some calls used a model with no published rate — spend is understated."}
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-box">
+        <header>What it would cost at volume</header>
+        <div class="inner">
+          <table class="calc">
+            <tr><td>Measured cost per customer turn</td>
+                <td class="num">${money(unit.gbp_per_turn)}</td></tr>
+            <tr><td>Turns in one contact <b>(estimated)</b></td>
+                <td class="num">${unit.turns_per_contact}</td></tr>
+            <tr><td>Cost per contact</td>
+                <td class="num">${money(unit.gbp_per_contact)}</td></tr>
+            <tr class="sep"><td>Contacts a year</td>
+                <td class="num">${num(unit.annual_contacts)}</td></tr>
+            <tr class="tot"><td>AI cost a year</td>
+                <td class="num">£${num(Math.round(unit.gbp_per_year))}</td></tr>
+          </table>
+          <div class="tiny" style="margin-top:10px;">
+            Only the prompts a conversation triggers are counted. Document
+            processing, chase drafting and consistency checks are billed per
+            claim, not per contact. Turns per contact is the one estimate on
+            this page.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-box" style="margin-top:12px;">
+      <header>What the AI did</header>
+      <div class="inner">
+        <div class="tiny" style="margin-bottom:11px;">Counts, not money — each
+          is a row in the database rather than a benefit we have assumed.</div>
+        <table class="calc">
+          <tr><td>Conversations handled</td>
+              <td class="num">${num(activity.conversations)}</td></tr>
+          <tr><td>…that reached a person</td>
+              <td class="num">${num(activity.conversations_reaching_a_person)}</td></tr>
+          <tr><td>Documents processed</td>
+              <td class="num">${num(activity.documents_processed)}</td></tr>
+          <tr><td>Claims registered by the bot</td>
+              <td class="num">${num(activity.claims_registered_by_bot)}</td></tr>
+          <tr><td>Chases drafted and sent</td>
+              <td class="num">${num(activity.chases_sent)}</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel-box" style="margin-top:12px;">
+      <header>Per prompt</header>
+      <div class="inner"><div id="admin-prompts"></div></div>
+    </div>`;
+
+  const rows = (d.by_prompt || []).filter(r => !r.cached);
+  const table = el("table", { class: "data" });
+  table.innerHTML = `<thead><tr><th>Prompt</th><th>Model</th><th class="num">Calls</th>
+      <th class="num">Tokens</th><th class="num">Avg latency</th><th class="num">Spend</th></tr></thead>`;
+  const body = el("tbody");
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="6" class="tiny">No model calls recorded yet.</td></tr>`;
+  }
+  rows.forEach(r => {
+    const tr = el("tr");
+    tr.innerHTML = `<td>${esc(r.prompt_key)}</td>
+      <td class="tiny">${esc(String(r.model).split("/").slice(1).join("/"))}</td>
+      <td class="num">${num(r.calls)}</td>
+      <td class="num">${num((r.tokens_in || 0) + (r.tokens_out || 0))}</td>
+      <td class="num">${Math.round(r.avg_latency_ms || 0)} ms</td>
+      <td class="num">${r.priced ? "$" + (r.usd || 0).toFixed(4) : "—"}</td>`;
+    body.append(tr);
+  });
+  table.append(body);
+  document.getElementById("admin-prompts").append(table);
+}
+
+async function loadMetrics() {
+  const host = document.getElementById("metrics-body");
+  if (!isManager) {
+    host.innerHTML = alertBox("info", "Metrics are available to managers.");
+    return;
+  }
+  host.innerHTML = '<div class="skel" style="width:40%"></div>';
+
+  const quality = await api("GET", "/admin/metrics/quality");
+  const costs = await api("GET", "/admin/metrics/costs");
+  const rows = costs.by_prompt || [];
+
+  host.innerHTML = `
+    <h2 style="margin-bottom:12px;">Quality</h2>
+    <div class="metrics" style="margin-bottom:10px;">
+      <div class="metric"><div class="label">Document verdicts</div><div class="value">${quality.document_verdicts || 0}</div></div>
+      <div class="metric"><div class="label">Human reviews</div><div class="value">${quality.human_reviews || 0}</div></div>
+      <div class="metric"><div class="label">AI verdicts overturned</div><div class="value">${quality.ai_verdicts_overturned || 0}</div></div>
+      <div class="metric"><div class="label">Guardrail blocks</div><div class="value">${quality.guardrail_blocks || 0}</div></div>
+      ${quality.override_rate !== null && quality.override_rate !== undefined ? `<div class="metric">
+        <div class="label">Override rate</div><div class="value">${(quality.override_rate * 100).toFixed(1)}%</div>
+        <div class="delta">key quality metric</div></div>` : ""}
+      <div class="metric"><div class="label">Template fallbacks</div>
+        <div class="value">${quality.template_fallbacks || 0}</div>
+        <div class="delta">LLM unavailable</div></div>
+    </div>
+
+    <h2 style="margin:22px 0 12px;">LLM usage by prompt</h2>
+    <div class="panel-box"><div class="inner">
+      ${rows.length ? `<table class="data"><thead><tr>
+        <th>Model</th><th>Prompt</th><th class="num">Calls</th><th class="num">OK</th><th class="num">Avg latency</th>
+      </tr></thead><tbody>${rows.map(row => `<tr>
+        <td class="mono">${esc(row.model)}</td><td>${esc(row.prompt_key)}</td>
+        <td class="num">${esc(row.calls)}</td><td class="num">${esc(row.ok_calls)}</td>
+        <td class="num">${Math.round(row.avg_latency_ms || 0)} ms</td></tr>`).join("")}</tbody></table>`
+        : `<div class="tiny">No LLM calls recorded yet.</div>`}
+    </div></div>`;
+}
+
+// ============================================================ audit
+
+async function loadAudit() {
+  const host = document.getElementById("audit-body");
+  if (!isManager) {
+    host.innerHTML = alertBox("info", "The audit trail is available to managers.");
+    return;
+  }
+  host.innerHTML = `<div class="row" style="margin-bottom:14px;max-width:520px;">
+      <input type="text" id="audit-filter" class="grow" placeholder="Filter by entity id (optional)">
+      <button class="btn" id="audit-go">Filter</button></div>
+    <div id="audit-chain"></div><div class="panel-box"><div class="inner" id="audit-rows"></div></div>`;
+
+  document.getElementById("audit-go").addEventListener("click", () =>
+    fetchAudit(document.getElementById("audit-filter").value.trim()));
+  document.getElementById("audit-filter").addEventListener("keydown", event => {
+    if (event.key === "Enter") fetchAudit(event.target.value.trim());
+  });
+  fetchAudit("");
+}
+
+async function fetchAudit(entityId) {
+  const rows = document.getElementById("audit-rows");
+  rows.innerHTML = '<div class="skel" style="width:50%"></div>';
+  const data = await api("GET", "/staff/audit/events", { params: { entity_id: entityId, limit: 100 } });
+  const chain = data.chain || {};
+
+  document.getElementById("audit-chain").innerHTML = chain.ok
+    ? alertBox("ok", `🔗 Hash chain intact across <b>${esc(chain.events)}</b> events.`)
+    : alertBox("error", `⚠️ Chain broken: ${esc(JSON.stringify(chain))}`);
+
+  const events = data.events || [];
+  rows.innerHTML = events.length ? "" : `<div class="tiny">No events matched.</div>`;
+  events.forEach(event => {
+    const node = el("div", { class: "audit-row" });
+    node.innerHTML = `<span class="ts">${esc((event.at || "").slice(0, 19))}</span>
+      <div><b>${esc(event.event_type)}</b>
+        <span class="tiny">· ${esc(event.actor_type || "")} · ${esc(event.entity_type || "")}
+        <code class="mono">${esc((event.entity_id || "").slice(0, 8))}</code></span>
+        <details class="disclose" style="margin-top:5px;"><summary>payload</summary>
+          <div class="body"><pre class="code">${esc(event.payload || "{}")}</pre></div></details></div>`;
+    rows.append(node);
+  });
+}
+
+
+const VIEWS = { admin: loadAdmin, metrics: loadMetrics, audit: loadAudit };
+loaded.admin = true;
+loadAdmin();
+</script>
+</body>
+</html>

@@ -50,7 +50,11 @@ def predict_timeline(customer_id: str, claim_id: str) -> dict[str, Any] | None:
     if claim is None:
         return None
     history = repo.get_status_history(claim_id, customer_id)
-    prediction = timeline_prediction.predict(claim, history)
+    # Whether the customer still owes us paperwork changes the DOCS_PENDING
+    # estimate materially, and the tool already knows enough to find out.
+    checklist = repo.checklist(claim_id, customer_id)
+    prediction = timeline_prediction.predict(
+        claim, history, awaiting_customer=bool(checklist["awaiting_customer"]))
     _audited("predict_timeline", customer_id, {"claim_id": claim_id}, 1)
     return prediction
 

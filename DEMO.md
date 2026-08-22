@@ -7,11 +7,11 @@ cd c:\Users\GENAIBLRANCUSR95\Downloads\poc\claimcompanion
 .\run.ps1
 ```
 
-Then open **http://localhost:8501**.
+Then open **http://127.0.0.1:8010**.
 
 | Flag | What it does |
 |---|---|
-| `.\run.ps1` | Start the API (:8010) and the UI (:8501) |
+| `.un.ps1` | Start the app on :8010 (API and UI in one process) |
 | `.\run.ps1 -Seed` | Wipe and regenerate the synthetic dataset first |
 | `.\run.ps1 -NoLlm` | Start in template mode — the graceful-degradation demo |
 | `.\run.ps1 -Evals` | Run the CI gates instead of starting anything |

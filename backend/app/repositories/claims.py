@@ -111,16 +111,25 @@ def _mark_superseded(documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return documents
 
 
-def get_document(document_id: str, customer_id: str) -> dict[str, Any] | None:
+def get_document(document_id: str, customer_id: str | None) -> dict[str, Any] | None:
+    """One document with its claim context.
+
+    ``customer_id`` of None skips the ownership filter and is for staff only:
+    reviewers work other people's documents, so the filter that protects
+    customers from each other would lock them out entirely.
+    """
+    scope = "" if customer_id is None else " AND p.customer_id = ?"
+    params = (document_id,) if customer_id is None else (document_id, customer_id)
     row = query_one(
-        """SELECT d.*, c.claim_number, c.incident_date, c.claim_type, c.claimed_amount,
-                  p.coverage_limit, cu.full_name AS policyholder_name
-           FROM document d
-           JOIN claim c ON c.id = d.claim_id
-           JOIN policy p ON p.id = c.policy_id
-           JOIN customer cu ON cu.id = p.customer_id
-           WHERE d.id = ? AND p.customer_id = ?""",
-        (document_id, customer_id),
+        f"""SELECT d.*, c.claim_number, c.incident_date, c.claim_type,
+                   c.claimed_amount, p.coverage_limit,
+                   cu.full_name AS policyholder_name
+            FROM document d
+            JOIN claim c ON c.id = d.claim_id
+            JOIN policy p ON p.id = c.policy_id
+            JOIN customer cu ON cu.id = p.customer_id
+            WHERE d.id = ?{scope}""",
+        params,
     )
     if row is None:
         return None
@@ -182,10 +191,27 @@ def checklist(claim_id: str, customer_id: str) -> dict[str, Any]:
             "document_id": uploads[0]["id"] if uploads else None,
         })
 
+    # Anything not yet accepted still blocks the claim, so this drives the
+    # claim's own progress...
     outstanding = [i["doc_type"] for i in items if i["mandatory"] and i["state"] != "VERIFIED"]
+    # ...but only these are the customer's to act on. Something already with a
+    # handler is our job, not theirs, and asking for it again is wrong.
+    awaiting_customer = [i["doc_type"] for i in items
+                         if i["mandatory"] and i["state"] in ("MISSING", "REJECTED")]
+    with_us = [i["doc_type"] for i in items
+               if i["mandatory"] and i["state"] in ("IN_REVIEW", "UPLOADED")]
+
     return {
         "claim_id": claim_id,
         "items": items,
         "outstanding_mandatory": outstanding,
+        "awaiting_customer": awaiting_customer,
+        "awaiting_customer_labels": [d.replace("_", " ") for d in awaiting_customer],
+        "with_us": with_us,
+        "with_us_labels": [d.replace("_", " ") for d in with_us],
+        # Readable form for anything that puts these in front of a customer.
+        # The model repeats what it is given, so handing it "damage_photos"
+        # produced replies with database column names in them.
+        "outstanding_labels": [d.replace("_", " ") for d in outstanding],
         "complete": not outstanding,
     }

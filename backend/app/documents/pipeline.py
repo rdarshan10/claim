@@ -408,7 +408,8 @@ def process(doc_id: str) -> dict[str, Any]:
                            f"Identical document also filed on claim "
                            f"{duplicate['claim_number']}.", 0.8)
         return _finish(doc_id, "NEEDS_REVIEW", trace_id, claim_id,
-                       _specialist_payload(doc_id), overall=overall)
+                       {**_specialist_payload(doc_id), "recommendation": "REVIEW"},
+                       overall=overall)
 
     date_failure = next((f for f in failures if f.details
                          and f.details.get("direction") == "before_incident"), None)
@@ -421,16 +422,44 @@ def process(doc_id: str) -> dict[str, Any]:
                        _specialist_payload(doc_id), overall=overall)
 
     # --- 8. verdict -----------------------------------------------------
+    # The pipeline recommends; a case handler decides. Documents are evidence
+    # for a payout, so nothing is accepted onto a claim without a person having
+    # looked — the AI's job is to do the reading and put a recommendation in
+    # front of them, not to sign it off (§11.6, §17.3).
     if failures:
         payload = rejection_builder.build({**document, "doc_type": doc_type},
                                           failures, ocr, document, trace_id=trace_id)
-        status = ("NEEDS_REVIEW" if payload["reason_code"] == R.REASON_DUPLICATE
-                  else "REJECTED_RULES")
-        return _finish(doc_id, status, trace_id, claim_id, payload, overall=overall)
+        payload["recommendation"] = "REJECT"
+        return _finish(doc_id, "NEEDS_REVIEW", trace_id, claim_id, payload,
+                       overall=overall)
 
-    execute("UPDATE required_document SET state = 'VERIFIED' WHERE claim_id = ? AND doc_type = ?",
-            (claim_id, doc_type))
-    return _finish(doc_id, "VERIFIED", trace_id, claim_id, None, overall=overall)
+    # Clean: recommended for acceptance, still queued for a handler.
+    execute("UPDATE required_document SET state = 'IN_REVIEW' "
+            "WHERE claim_id = ? AND doc_type = ?", (claim_id, doc_type))
+    return _finish(doc_id, "NEEDS_REVIEW", trace_id, claim_id,
+                   _recommend_accept(doc_id, doc_type), overall=overall)
+
+
+def _recommend_accept(doc_id: str, doc_type: str) -> dict[str, Any]:
+    """What the customer sees while a handler checks a clean document."""
+    label = (doc_type or "document").replace("_", " ")
+    return {
+        "doc_id": doc_id,
+        "reason_code": "AWAITING_REVIEW",
+        "recommendation": "ACCEPT",
+        "headline": "Received — with our claims team",
+        "plain_explanation": (
+            f"Thanks — we've read your {label} and everything checks out. "
+            f"One of our claims handlers is confirming it's what we need, and I'll "
+            f"let you know here as soon as it's accepted. That's a check on the "
+            f"document itself — the claim is assessed separately once we have "
+            f"everything. You don't need to do anything."
+        ),
+        "fix_steps": [],
+        "technical_detail": ["All automated checks passed."],
+        "failed_rules": [],
+        "can_dispute": False,
+    }
 
 
 def _specialist_payload(doc_id: str) -> dict[str, Any]:

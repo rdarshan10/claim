@@ -19,7 +19,7 @@ cd claimcompanion
 .\run.ps1
 ```
 
-Then open **http://localhost:8501**. See [DEMO.md](DEMO.md) for a 7-minute
+Then open **http://127.0.0.1:8010**. See [DEMO.md](DEMO.md) for a 7-minute
 walkthrough.
 
 | Flag | What it does |
@@ -27,24 +27,32 @@ walkthrough.
 | `.\run.ps1 -Seed` | Regenerate the synthetic dataset first |
 | `.\run.ps1 -NoLlm` | Template mode — the graceful-degradation demo |
 | `.\run.ps1 -Evals` | Run the CI gates |
-| `.\run.ps1 -Stop` | Stop both services |
+| `.
+un.ps1 -Stop` | Stop the server |
+
+The API also serves the UI, so there is a single process:
+
+| URL | What |
+|---|---|
+| `http://127.0.0.1:8010/` | Sign in |
+| `http://127.0.0.1:8010/portal` | Customer portal |
+| `http://127.0.0.1:8010/staff` | Staff console |
+| `http://127.0.0.1:8010/docs` | API docs |
 
 <details>
-<summary>Starting the two processes by hand</summary>
+<summary>Starting it by hand</summary>
 
 ```powershell
-$env:PYTHONPATH = "$PWD\backend;$PWD"
-..\.venv\Scripts\python.exe -m datagen.generate --seed 42
-..\.venv\Scripts\python.exe -m uvicorn app.main:app --port 8010
-
-# second terminal
-$env:PYTHONPATH = "$PWD\backend;$PWD"
-$env:CLAIMCOMPANION_API = "http://127.0.0.1:8010/api/v1"
-..\.venv\Scripts\python.exe -m streamlit run frontend/app.py
+$env:PYTHONPATH = "$PWDackend;$PWD"
+python -m datagen.generate --seed 42
+python -m uvicorn app.main:app --port 8010
 ```
 </details>
 
 > Port 8010 is used because `proxy.py` in the parent folder occupies 8000.
+
+The frontend is plain HTML, CSS and ES modules under `frontend/static/` — no
+build step, no framework, no bundler. Refresh the page to pick up an edit.
 
 **Demo logins** (one-time code `000000`):
 
@@ -66,14 +74,38 @@ anything else gets agent rights.
 
 ```powershell
 # guardrail + grounding gates only (no LLM calls, fast)
-..\.venv\Scripts\python.exe -m evals.run_evals --skip-documents
+python -m evals.run_evals --skip-documents
 
 # add the document pipeline against labelled ground truth (makes LLM calls)
-..\.venv\Scripts\python.exe -m evals.run_evals --limit 20
+python -m evals.run_evals --limit 20
 ```
 
 Gates enforced: injection block rate 100%, out-of-scope block 100%, grounding
 accuracy 100%, document-type accuracy ≥ 92%.
+
+---
+
+## Starting a claim (FNOL)
+
+Insurers don't create a claim the moment someone reports an incident. They take
+a **First Notice of Loss**, check it, and only then register it on the core
+system. ClaimCompanion follows the same sequence:
+
+| Stage | Who | What happens |
+|---|---|---|
+| Intake | Customer | The assistant collects the details through interactive cards — one question at a time, with document upload. Produces `FNOL-XXXXXX`. **No claim exists yet.** |
+| Triage | Staff | *New claims* tab: check the details against the policy. Approve, ask the customer for more, or reject. Asking or rejecting posts a message into the customer's own thread. |
+| Registration | Bot | Playwright drives a real headless Chrome against POLARIS (the core system at `/core-system`), typing into the form a handler would use. Staff watch it live, frame by frame. |
+| Claim | — | The returned claim number becomes a real `claim` row at `DOCS_PENDING`, with adjuster, reserve and checklist. It behaves like any other claim from here. |
+| Notified | Customer | Told in the **same conversation thread** — no separate alert to go and find. |
+
+The FNOL record survives registration as the audit trail of how the claim
+originated. A run that fails returns the notification to the queue rather than
+leaving it stuck.
+
+> The registration bot needs Playwright (`pip install playwright`). Without it
+> the run degrades to a deterministic simulation — the claim is still registered,
+> only the screenshots are missing.
 
 ---
 
@@ -206,9 +238,13 @@ validation rule passed, never sees another customer's data, and never writes SQL
 
 | Tier | Model | Used for |
 |---|---|---|
-| mini | `azure/genailab-maas-gpt-4.1-mini` | intent + sentiment, in one call (~90% of calls) |
-| primary | `azure/genailab-maas-gpt-4.1` | extraction, empathy, rejection explanations, relay |
-| fallback | `genailab-maas-sonnet-4.6` | different provider, for resilience |
+| mini | `openai/gpt-oss-20b` | intent + sentiment, in one call (~90% of calls) |
+| primary | `openai/gpt-oss-120b` | extraction, empathy, rejection explanations, relay |
+| fallback | `openai/gpt-oss-20b` | retry on a cheaper model when the primary fails |
+
+Served by Groq over its OpenAI-compatible chat-completions API. The fallback is
+the same vendor, so it covers a model-level failure but not a provider-wide
+outage — that degrades to template mode instead (UC-N7).
 
 Three routing rules that matter more than the model choice:
 
@@ -253,7 +289,9 @@ claimcompanion/
 ## Configuration
 
 All settings are env-driven (`backend/app/config.py`). The API key is read from
-`API_KEY` in the parent `.env`. Useful switches:
+`GROQ_API_KEY` in `.env` (copy `.env.example`). Note that a `GROQ_API_KEY`
+already set in your shell or Windows user environment takes precedence over the
+`.env` file. Useful switches:
 
 | Variable | Default | Effect |
 |---|---|---|

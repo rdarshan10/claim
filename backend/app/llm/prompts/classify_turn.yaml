@@ -1,5 +1,5 @@
 key: classify_turn
-version: "1.0.0"
+version: "1.1.0"
 description: >
   Intent + sentiment in a single call. These read the same message and are both
   cheap classifications; splitting them doubled the latency of ~90% of turns for
@@ -10,7 +10,13 @@ system: |
 
   INTENT — choose exactly one:
     greeting       hello, thanks, goodbye, "what can you do" — social, not a task
-    claim_status   status, progress, timelines, "when will I be paid"
+    new_claim      wants to START a new claim, or is reporting an incident or
+                   loss for the first time ("I want to make a claim", "I had a
+                   crash", "my flat was broken into"). Reporting something that
+                   happened is new_claim; asking about something already filed
+                   is claim_status.
+    claim_status   status, progress, timelines, "when will I be paid" — about a
+                   claim that already exists
     documents      uploads, what's missing, why a document was rejected
     knowledge      how the process works, policy terms, definitions
     human_request  explicitly asking for a person, or a complaint to escalate

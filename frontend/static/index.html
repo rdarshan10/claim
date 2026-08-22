@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClaimCompanion — Sign in</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🛡️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/app.css">
+<style>
+  body {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background:
+      radial-gradient(900px 500px at 15% -10%, #e8edff 0%, transparent 60%),
+      radial-gradient(800px 500px at 105% 110%, #dcfce7 0%, transparent 55%),
+      var(--bg);
+  }
+  .login-wrap { width: 100%; max-width: 940px; display: grid; grid-template-columns: 1.05fr .95fr; gap: 0;
+                background: var(--surface); border: 1px solid var(--line);
+                border-radius: var(--r-xl); box-shadow: var(--shadow-lg); overflow: hidden; }
+  .pitch { padding: 42px 40px; background: linear-gradient(160deg, var(--navy-900), var(--navy-700)); color: #fff; }
+  .pitch .logo { display: flex; align-items: center; gap: 10px; font-size: 1.22rem; font-weight: 680; letter-spacing: -.02em; }
+  .pitch h1 { color: #fff; font-size: 1.72rem; line-height: 1.25; margin: 26px 0 12px; letter-spacing: -.022em; }
+  .pitch p { color: #b9c6dd; font-size: .92rem; line-height: 1.62; }
+  .feats { list-style: none; padding: 0; margin: 30px 0 0; display: grid; gap: 14px; }
+  .feats li { display: flex; gap: 11px; font-size: .875rem; color: #dbe4f5; align-items: flex-start; }
+  .feats .fi { flex-shrink: 0; width: 26px; height: 26px; border-radius: 7px; background: rgba(255,255,255,.11);
+               display: grid; place-items: center; font-size: .82rem; }
+  .feats b { color: #fff; font-weight: 600; display: block; margin-bottom: 1px; }
+  .feats span.d { color: #97a8c4; font-size: .81rem; line-height: 1.45; }
+  .form-side { padding: 38px 36px; display: flex; flex-direction: column; justify-content: center; }
+  .seg { display: flex; gap: 3px; background: var(--surface-3); padding: 3px; border-radius: var(--r-sm); margin-bottom: 22px; }
+  .seg button { flex: 1; appearance: none; border: 0; background: none; font: inherit; font-size: .86rem;
+                font-weight: 570; padding: 8px; border-radius: 5px; color: var(--ink-3); cursor: pointer; transition: .13s; }
+  .seg button.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
+  .demo-accounts { margin-top: 18px; padding: 12px 14px; background: var(--surface-2);
+                   border: 1px dashed var(--line-2); border-radius: var(--r); font-size: .79rem; color: var(--ink-3); }
+  .demo-accounts b { color: var(--ink-2); }
+  .chip { display: inline-block; padding: 2px 7px; margin: 2px 3px 2px 0; background: var(--surface);
+          border: 1px solid var(--line-2); border-radius: 5px; font-family: var(--mono); font-size: .74rem;
+          cursor: pointer; color: var(--ink-2); }
+  .chip:hover { border-color: var(--indigo-500); color: var(--indigo-600); }
+  @media (max-width: 820px) { .login-wrap { grid-template-columns: 1fr; } .pitch { display: none; } }
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <aside class="pitch">
+    <div class="logo"><span>🛡️</span> ClaimCompanion</div>
+    <h1>Your claim,<br>explained in plain English.</h1>
+    <p>Ask anything about your claim and get a straight answer — grounded in your actual file, never invented.</p>
+    <ul class="feats">
+      <li><span class="fi">💬</span><div><b>One assistant, one thread</b><span class="d">Even when a specialist steps in, you keep one point of contact.</span></div></li>
+      <li><span class="fi">📄</span><div><b>Documents checked in seconds</b><span class="d">If something's wrong we show you exactly what and how to fix it.</span></div></li>
+      <li><span class="fi">🔒</span><div><b>Every answer traceable</b><span class="d">Facts are cross-checked against your file before you see them.</span></div></li>
+    </ul>
+  </aside>
+
+  <main class="form-side">
+    <div id="notice"></div>
+    <div class="seg">
+      <button id="seg-customer" class="active">Customer</button>
+      <button id="seg-staff">Staff</button>
+    </div>
+
+    <form id="form-customer">
+      <h2 style="margin-bottom:4px;">Welcome back</h2>
+      <p class="muted" style="margin-bottom:20px;">Sign in to see your claim.</p>
+      <label class="field"><span>Email</span>
+        <input type="email" id="email" value="priya@example.com" autocomplete="username" required></label>
+      <label class="field"><span>One-time code</span>
+        <input type="text" id="otp" value="000000" inputmode="numeric" autocomplete="one-time-code" required></label>
+      <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+      <div class="demo-accounts">
+        <b>Demo accounts</b> — code <b>000000</b><br>
+        <span class="chip" data-email="priya@example.com">priya@example.com</span>
+        <span class="chip" data-email="marcus@example.com">marcus@example.com</span>
+        <span class="chip" data-email="elena@example.com">elena@example.com</span>
+        <span class="chip" data-email="james@example.com">james@example.com</span>
+        <span class="chip" data-email="aisha@example.com">aisha@example.com</span>
+      </div>
+    </form>
+
+    <form id="form-staff" class="hidden">
+      <h2 style="margin-bottom:4px;">Staff console</h2>
+      <p class="muted" style="margin-bottom:20px;">Review queue, cases and audit.</p>
+      <label class="field"><span>Username</span>
+        <input type="text" id="username" value="manager.elena" autocomplete="username" required></label>
+      <label class="field"><span>One-time code</span>
+        <input type="text" id="staff-otp" value="000000" inputmode="numeric" required></label>
+      <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+      <div class="demo-accounts">
+        <b>Any username works.</b> Start it with <b>manager</b> for manager rights
+        (audit&nbsp;+&nbsp;metrics); anything else is an agent. Code <b>000000</b>.<br>
+        <span class="chip" data-user="manager.elena">manager.elena</span>
+        <span class="chip" data-user="agent.marcus">agent.marcus</span>
+      </div>
+    </form>
+  </main>
+</div>
+
+<script type="module">
+import { api, session, toast, alertBox, withBusy, esc } from "/static/js/api.js";
+
+// A stale session shouldn't strand you on the login page.
+if (session.token) location.href = session.role === "customer" ? "/portal" : "/staff";
+
+const notice = sessionStorage.getItem("cc_notice");
+if (notice) {
+  document.getElementById("notice").innerHTML = alertBox("warn", esc(notice));
+  sessionStorage.removeItem("cc_notice");
+}
+
+const forms = { customer: document.getElementById("form-customer"), staff: document.getElementById("form-staff") };
+const segs = { customer: document.getElementById("seg-customer"), staff: document.getElementById("seg-staff") };
+
+for (const key of ["customer", "staff"]) {
+  segs[key].addEventListener("click", () => {
+    for (const other of ["customer", "staff"]) {
+      segs[other].classList.toggle("active", other === key);
+      forms[other].classList.toggle("hidden", other !== key);
+    }
+  });
+}
+
+document.querySelectorAll(".chip[data-email]").forEach(chip =>
+  chip.addEventListener("click", () => { document.getElementById("email").value = chip.dataset.email; }));
+document.querySelectorAll(".chip[data-user]").forEach(chip =>
+  chip.addEventListener("click", () => { document.getElementById("username").value = chip.dataset.user; }));
+
+async function signIn(button, path, payload, fallbackRole) {
+  await withBusy(button, async () => {
+    try {
+      const result = await api("POST", path, { json: payload });
+      session.set({ ...result, role: result.role || fallbackRole });
+      location.href = fallbackRole === "customer" ? "/portal" : "/staff";
+    } catch (error) {
+      toast(error.message, "err");
+    }
+  });
+}
+
+forms.customer.addEventListener("submit", event => {
+  event.preventDefault();
+  signIn(event.submitter, "/auth/login", {
+    email: document.getElementById("email").value.trim(),
+    otp: document.getElementById("otp").value.trim(),
+  }, "customer");
+});
+
+forms.staff.addEventListener("submit", event => {
+  event.preventDefault();
+  signIn(event.submitter, "/auth/staff/login", {
+    username: document.getElementById("username").value.trim(),
+    otp: document.getElementById("staff-otp").value.trim(),
+  }, "agent");
+});
+</script>
+</body>
+</html>

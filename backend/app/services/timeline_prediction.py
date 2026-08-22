@@ -36,6 +36,8 @@ DWELL: dict[str, dict[str, tuple[float, float]]] = {
 
 STAGE_MEANING = {
     "FILED": "We've received your claim and opened a file.",
+    # Overridden by stage_meaning() when everything has actually been sent —
+    # this wording only applies while the customer still owes us something.
     "DOCS_PENDING": "We're waiting for your documents before we can assess the claim.",
     "IN_ASSESSMENT": "Our team is reviewing your claim and the evidence you sent.",
     "ADDITIONAL_INFO": "We've asked for something extra before we can decide.",
@@ -48,17 +50,46 @@ STAGE_MEANING = {
 
 TERMINAL = {"SETTLED", "REJECTED", "WITHDRAWN"}
 
+# What DOCS_PENDING means once the customer has sent everything and it is
+# sitting with a handler. Same database status, different person holding it.
+DOCS_WITH_US = "You've sent everything we asked for — we're checking it now."
+
+
+def stage_meaning(status: str, *, awaiting_customer: bool = True) -> str:
+    """The customer-facing sentence for a stage.
+
+    ``awaiting_customer`` distinguishes the two halves of DOCS_PENDING: False
+    means the paperwork is in and the wait is on us, not them.
+    """
+    if status == "DOCS_PENDING" and not awaiting_customer:
+        return DOCS_WITH_US
+    return STAGE_MEANING.get(status, "")
+
+
+# Stages every claim actually passes through. ADDITIONAL_INFO is an exception
+# branch — most claims never enter it — so forecasting it for everyone
+# overstated every timeline and implied we were about to ask for more.
+HAPPY_PATH = [s for s in STAGE_ORDER if s != "ADDITIONAL_INFO"]
+
 
 def _remaining_stages(status: str) -> list[str]:
     if status in TERMINAL:
         return []
-    if status not in STAGE_ORDER:
-        return STAGE_ORDER[1:]
-    return STAGE_ORDER[STAGE_ORDER.index(status) :]
+    # A claim genuinely sitting in ADDITIONAL_INFO still has to clear it.
+    order = STAGE_ORDER if status == "ADDITIONAL_INFO" else HAPPY_PATH
+    if status not in order:
+        return order[1:]
+    return order[order.index(status):]
 
 
-def predict(claim: dict[str, Any], history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Return predicted stages with date ranges and a confidence score."""
+def predict(claim: dict[str, Any], history: list[dict[str, Any]] | None = None,
+            *, awaiting_customer: bool = True) -> dict[str, Any]:
+    """Return predicted stages with date ranges and a confidence score.
+
+    ``awaiting_customer`` is False once every required document has been sent.
+    Most of the DOCS_PENDING dwell is the customer gathering paperwork, so with
+    it already in, that stage collapses to the handler check.
+    """
     status = claim.get("status", "FILED")
     claim_type = (claim.get("claim_type") or "motor").lower()
     params = DWELL.get(claim_type, DWELL["motor"])
@@ -82,6 +113,10 @@ def predict(claim: dict[str, Any], history: list[dict[str, Any]] | None = None) 
         if stage == "SETTLED":
             continue
         median, sigma = params.get(stage, (3.0, 0.5))
+        if stage == "DOCS_PENDING" and not awaiting_customer:
+            # Everything is in; what remains is a handler signing it off, not
+            # the customer chasing documents.
+            median, sigma = 1.0, 0.35
         # Lognormal: median is exp(mu); p10/p90 bound the confidence band.
         low = median * math.exp(-1.2816 * sigma)
         high = median * math.exp(1.2816 * sigma)
@@ -113,6 +148,8 @@ def predict(claim: dict[str, Any], history: list[dict[str, Any]] | None = None) 
         "basis": (
             f"Based on typical stage durations for {claim_type} claims "
             f"({len(stages)} stage(s) remaining)."
+            + ("" if awaiting_customer
+               else " Your documents are already in, so this is shorter than usual.")
         ),
     }
 
