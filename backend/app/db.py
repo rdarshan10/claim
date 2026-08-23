@@ -312,6 +312,11 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # a fresh question — the customer accepts the offer and is answered about
     # something else entirely.
     ("conversation", "offered_human_at", "TEXT"),
+    # Set the first time the offer is made and never cleared. ``offered_human_at``
+    # above is a one-turn signal and so cannot suppress anything: while a
+    # customer stayed frustrated the offer was re-made on every single turn,
+    # which reads as the assistant trying to hand them off rather than help.
+    ("conversation", "human_offered_ever_at", "TEXT"),
 ]
 
 

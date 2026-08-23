@@ -273,6 +273,39 @@ export function renderCard(host, card, handlers = {}, replay = false) {
 }
 
 /** Confidence trio used on documents in both surfaces. */
+/** Receipt for one uploaded document.
+ *
+ *  Every file gets its own, so sending three at once reads as three outcomes
+ *  rather than one merged sentence — and so the thread still shows what was
+ *  sent after the verdict wording has scrolled away. */
+export function documentReceiptCard(document_) {
+  const status = String(document_.status || "");
+  const verified = status === "VERIFIED";
+  const rejected = status.startsWith("REJECTED");
+  const badge = verified ? "b-green" : rejected ? "b-red" : "b-slate";
+  // "With our team" rather than the raw NEEDS_REVIEW: a clean document sitting
+  // with a handler is not a problem, and the enum reads like one.
+  const wording = verified ? "Accepted" : rejected ? "Not accepted" : "With our team";
+  // Deliberately no confidence scores: readability and classification numbers
+  // are how the pipeline reasons, not something a customer can act on, and a
+  // "70%" beside an accepted document only invites doubt about a settled fact.
+  const rejection = document_.rejection_payload || document_.rejection || {};
+  const note = verified
+    ? "Checked and accepted for this claim."
+    : rejected
+    ? (rejection.headline || "We couldn't accept this one.")
+    : "Read and passed to one of our claims handlers — nothing for you to do.";
+  return `<div class="card card-tight doc-receipt">
+    <div class="row">
+      <span class="check-ico">${verified ? "✅" : rejected ? "⚠️" : "🔍"}</span>
+      <span class="grow"><b>${esc(titleCase(document_.doc_type || "document"))}</b>
+        <div class="tiny">${esc(document_.filename || "")}</div></span>
+      <span class="badge ${badge}">${esc(wording)}</span>
+    </div>
+    <div class="tiny doc-receipt-note">${esc(note)}</div>
+  </div>`;
+}
+
 export function confidenceMetrics(document_, withOverall = false) {
   const ocr = document_.ocr_quality || 0;
   const cls = document_.classification_conf || 0;

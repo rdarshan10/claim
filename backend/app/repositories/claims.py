@@ -163,6 +163,24 @@ def set_status(claim_id: str, to_status: str, reason: str, actor_type: str = "sy
     )
 
 
+def needs_replacing(document: dict[str, Any]) -> bool:
+    """Is this a document the customer has to send again?
+
+    Two shapes mean the same thing and both have to count. The seeder writes a
+    ``REJECTED_*`` status directly. The live pipeline never does: a failed
+    document is stored as ``NEEDS_REVIEW`` carrying ``recommendation: REJECT``,
+    because the pipeline recommends and a handler decides (§11.6).
+
+    Testing the status alone put every live rejection into IN_REVIEW, which told
+    the customer "nothing for you to do" underneath a card explaining that their
+    document was unusable.
+    """
+    if str(document.get("status", "")).startswith("REJECTED"):
+        return True
+    return (document.get("status") == "NEEDS_REVIEW"
+            and (document.get("rejection_payload") or {}).get("recommendation") == "REJECT")
+
+
 def checklist(claim_id: str, customer_id: str) -> dict[str, Any]:
     """Required-set minus verified-set, with per-item state (§11.3)."""
     required = get_required_documents(claim_id, customer_id)
@@ -176,11 +194,13 @@ def checklist(claim_id: str, customer_id: str) -> dict[str, Any]:
     for req in required:
         uploads = by_type.get(req["doc_type"], [])
         state = "MISSING"
+        # Order matters: an acceptable upload outranks an earlier bad one, so a
+        # customer who has already sent a good replacement is never asked again.
         if any(d["status"] == "VERIFIED" for d in uploads):
             state = "VERIFIED"
-        elif any(d["status"] == "NEEDS_REVIEW" for d in uploads):
+        elif any(d["status"] == "NEEDS_REVIEW" and not needs_replacing(d) for d in uploads):
             state = "IN_REVIEW"
-        elif any(str(d["status"]).startswith("REJECTED") for d in uploads):
+        elif any(needs_replacing(d) for d in uploads):
             state = "REJECTED"
         elif uploads:
             state = "UPLOADED"

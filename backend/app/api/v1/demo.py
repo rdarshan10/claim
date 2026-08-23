@@ -119,7 +119,11 @@ async def reset_demo(body: ResetRequest,
     """
     if body.scope not in ("conversation", "customer", "all", "claims"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Unknown scope")
-    if body.scope in ("all", "claims") and principal.role not in ("agent", "manager"):
+    # ``all`` stays staff-only: it wipes every customer's chat history, which is
+    # not something one customer should be able to do to the others. ``claims``
+    # is open to whoever is driving the demo — it restores the shipped sample
+    # set rather than destroying anything real.
+    if body.scope == "all" and principal.role not in ("agent", "manager"):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "Only staff can reset everyone's demo state")
 

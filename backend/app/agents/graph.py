@@ -179,10 +179,17 @@ def run_turn(
     # Frustration is a reason to *ask* whether they want a colleague, not to
     # open a case on their behalf. Only when nothing is already open, and only
     # when they haven't just asked for one — that path escalates for real.
-    if (state.sentiment in ("frustrated", "confused")
+    #
+    # Offered at most once per conversation, and only on frustration. Repeating
+    # it every turn undercut the assistant: a customer who is merely confused
+    # wants an answer, and one who is frustrated has already been asked and
+    # said no. Anyone who wants a person can still say so at any point, which
+    # routes to human_request and escalates directly.
+    if (state.sentiment == "frustrated"
             and state.intent not in ("human_request", "out_of_scope", "new_claim")
             and not handoff
-            and not state.escalation_ticket_id):
+            and not state.escalation_ticket_id
+            and not _already_offered(state)):
         state.cards.append({
             "card_type": "offer_human",
             "payload": {
@@ -314,12 +321,31 @@ _AFFIRMATIVES = {
 }
 
 
+def _already_offered(state: GraphState) -> bool:
+    """Have we offered a colleague at any point in this conversation?
+
+    Separate from ``offered_human_at``, which is deliberately short-lived: it
+    is consumed on the next turn so a stray "yes" much later never re-triggers
+    an escalation. This one is never cleared, so the offer is made once and the
+    assistant then gets on with helping.
+    """
+    if not state.conversation_id:
+        return False
+    row = query_one("SELECT human_offered_ever_at FROM conversation WHERE id = ?",
+                    (state.conversation_id,))
+    return bool(row and row["human_offered_ever_at"])
+
+
 def _mark_offer(state: GraphState) -> None:
     """Record that we offered to fetch a colleague on this turn."""
     if not state.conversation_id:
         return
-    execute("UPDATE conversation SET offered_human_at = ? WHERE id = ?",
-            (datetime.now(timezone.utc).isoformat(), state.conversation_id))
+    now = datetime.now(timezone.utc).isoformat()
+    # offered_human_at drives "yes" on the very next turn; human_offered_ever_at
+    # stops the offer being made a second time.
+    execute("UPDATE conversation SET offered_human_at = ?, "
+            "human_offered_ever_at = COALESCE(human_offered_ever_at, ?) WHERE id = ?",
+            (now, now, state.conversation_id))
 
 
 def _accepted_offer(state: GraphState) -> bool:

@@ -47,6 +47,15 @@ INTENT_SIGNALS: dict[str, list[str]] = {
         r"\bstatus\b", r"\bwhere is my claim\b", r"\bwhen will i (?:be paid|get)\b",
         r"\bhow long\b", r"\bprogress\b", r"\bupdate on\b", r"\bpaid\b",
         r"\bsettle(?:d|ment)?\b", r"\bmy claim\b", r"\bapproved\b", r"\btimeline\b",
+        # Details already on the claim record. Without these, "when was the
+        # incident?" matched nothing at all and fell through to the knowledge
+        # default — which has no article about this customer's own claim, so it
+        # correctly refused to guess and offered a human instead. The date was
+        # sitting in the claim the whole time.
+        r"\bincident\b", r"\bdate of (?:loss|incident|accident)\b",
+        r"\bwhen (?:was|did) (?:the|my|it)\b",
+        r"\bhow much (?:am|did|is|was|will)\b",
+        r"\bclaim (?:number|reference|ref)\b", r"\bclm-\d+\b",
     ],
     "knowledge": [
         r"\bwhat is\b", r"\bwhat does .* mean\b", r"\bhow (?:do|does) .* work\b",

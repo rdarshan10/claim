@@ -1,5 +1,5 @@
 key: classify_turn
-version: "1.1.0"
+version: "1.2.0"
 description: >
   Intent + sentiment in a single call. These read the same message and are both
   cheap classifications; splitting them doubled the latency of ~90% of turns for
@@ -15,10 +15,14 @@ system: |
                    crash", "my flat was broken into"). Reporting something that
                    happened is new_claim; asking about something already filed
                    is claim_status.
-    claim_status   status, progress, timelines, "when will I be paid" — about a
-                   claim that already exists
+    claim_status   anything factual about a claim that already exists — its
+                   status, progress, timelines, "when will I be paid", and the
+                   details on record: the incident date, when it was filed, the
+                   amount claimed or approved, the claim reference
     documents      uploads, what's missing, why a document was rejected
-    knowledge      how the process works, policy terms, definitions
+    knowledge      how the process works in general, policy terms, definitions.
+                   NOT facts about this customer's own claim — "what is an
+                   excess" is knowledge, "when was my incident" is claim_status
     human_request  explicitly asking for a person, or a complaint to escalate
     out_of_scope   a genuine request that has nothing to do with insurance
                    (recipes, coding help, medical or investment advice)

@@ -235,6 +235,25 @@ def _last_claim_sequence() -> int:
     return int(row["n"]) if row and row["n"] else 88410
 
 
+def _launch(pw: Any, recorder: _Recorder) -> Any:
+    """Real Chrome where the machine has it, Playwright's own build otherwise.
+
+    ``channel="chrome"`` puts the browser an audience recognises on screen, but
+    that distribution only exists where Google Chrome is installed — elsewhere
+    the launch raises and the whole registration fails. Playwright's bundled
+    Chromium drives the form identically, so falling back keeps this a genuine
+    browser run rather than dropping to simulation over a missing binary.
+    """
+    args = ["--force-device-scale-factor=1"]
+    try:
+        return pw.chromium.launch(channel="chrome", args=args)
+    except Exception:  # noqa: BLE001 - any launch failure means "no Chrome here"
+        recorder.step("Using bundled Chromium",
+                      "Google Chrome is not installed on this host; Playwright's "
+                      "own Chromium build drives the form instead.")
+        return pw.chromium.launch(args=args)
+
+
 def _drive_browser(recorder: _Recorder, values: dict[str, str]) -> dict[str, Any]:
     from playwright.sync_api import sync_playwright
 
@@ -243,7 +262,7 @@ def _drive_browser(recorder: _Recorder, values: dict[str, str]) -> dict[str, Any
 
     recorder.step("Launching browser", "Headless Chrome, RPA service account")
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(channel="chrome", args=["--force-device-scale-factor=1"])
+        browser = _launch(pw, recorder)
         try:
             page = browser.new_page(viewport={"width": 1180, "height": 900})
             page.goto(f"{base}{PORTAL_PATH}?seq={_last_claim_sequence()}",

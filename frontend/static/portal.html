@@ -11,7 +11,14 @@
 <link rel="stylesheet" href="/static/css/app.css">
 <style>
 /* ------------------------------------------------------------------ chat */
-.chat-shell { display: flex; flex-direction: column; height: calc(100vh - 60px - 45px - 30px); min-height: 460px; }
+/* Viewport minus the chrome above and below the chat: 60px header + 47px tab
+   bar + the container's 26px/72px padding = 205px. The old figure subtracted
+   135px, so the panel stood 70px taller than the space it had and the whole
+   page scrolled behind the sticky bars — the chat has its own scroller, so the
+   document should not move at all here. dvh so mobile browser chrome counts. */
+.chat-shell { display: flex; flex-direction: column;
+              height: calc(100vh - 205px); height: calc(100dvh - 205px);
+              min-height: 460px; }
 .chat-scroll { flex: 1; overflow-y: auto; padding: 6px 2px 14px; scroll-behavior: smooth; }
 
 .msg { display: flex; gap: 11px; margin-bottom: 18px; max-width: 96%; }
@@ -130,7 +137,7 @@
 <script type="module">
 import { api, session, esc, md, richText, money, pct, humanise, titleCase, statusBadge,
          requireAuth, mountHeader, wireHeader, toast, alertBox, withBusy, el } from "/static/js/api.js";
-import { timelineCard, checklistCard, rejectionCard, renderCard, confidenceMetrics, jsonBlock } from "/static/js/cards.js";
+import { timelineCard, checklistCard, rejectionCard, renderCard, jsonBlock, documentReceiptCard } from "/static/js/cards.js";
 import { statusCard as fnolStatusCard } from "/static/js/fnol-cards.js";
 import { mountDemoBar } from "/static/js/demo-bar.js";
 
@@ -144,6 +151,9 @@ mountDemoBar(document.getElementById("demo-slot"), {
     // Everything on screen came from state that no longer exists.
     clearTimeout(state.polling);
     state.cards = {};
+    state.uploads = [];
+    state.lastMessageId = null;
+    state.threadSignature = null;
     claimsCache = null;
     fnolCache = null;
     await startConversation(true);
@@ -167,7 +177,14 @@ document.querySelectorAll(".tab[data-panel]").forEach(tab => {
 const SHIELD = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
   <path d="M12 1.6 3.6 5v6.4c0 5.2 3.6 10 8.4 11.2 4.8-1.2 8.4-6 8.4-11.2V5L12 1.6Z"/></svg>`;
 
-const state = { cid: null, greeting: "", cards: {}, awayMarker: null, activeClaimId: null, polling: null, busy: false };
+// `uploads` holds the verdict for each document sent in this session. The
+// pipeline writes no message for an upload, so these exist only on the client —
+// and renderThread rebuilds the thread from scratch, which would wipe the
+// rejection explanation while the customer is still reading it. Each entry is
+// anchored to the message it followed so it keeps its place in the thread.
+const state = { cid: null, greeting: "", cards: {}, uploads: [], lastMessageId: null,
+                threadSignature: null, awayMarker: null, activeClaimId: null,
+                polling: null, busy: false };
 const thread = document.getElementById("thread");
 
 async function startConversation(fresh = false) {
@@ -175,6 +192,7 @@ async function startConversation(fresh = false) {
   state.cid = result.conversation_id;
   state.greeting = result.greeting;
   state.cards = {};
+  state.uploads = [];
   state.awayMarker = null;
   renderThread({ messages: [], suggestions: result.suggestions || [] });
   await refresh();
@@ -210,6 +228,7 @@ function renderThread(payload) {
   const stick = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 130;
   thread.innerHTML = "";
   thread.append(bubble("assistant", state.greeting));
+  flushUploads(null);
 
   for (const message of messages) {
     if (message.id === state.awayMarker) {
@@ -232,7 +251,9 @@ function renderThread(payload) {
       });
       thread.append(host);
     }
+    flushUploads(message.id);
   }
+  state.lastMessageId = messages.length ? messages[messages.length - 1].id : null;
 
   // Chips come from the poll response so they follow the checklist — once the
   // police report is accepted, stop offering to explain how to get one.
@@ -283,7 +304,23 @@ function renderHandoff(handoff) {
        I'll bring their answer straight here.`);
 }
 
-async function refresh() {
+/** Identity of what the thread is currently showing.
+ *
+ *  renderThread rebuilds from scratch, so re-running it on a poll that brought
+ *  nothing new would wipe whatever the customer is part-way through typing into
+ *  an intake card — and the poll runs every 6s while a document is with a
+ *  handler. Comparing this first keeps an idle poll invisible. */
+function threadSignature(payload) {
+  return JSON.stringify({
+    ids: (payload.messages || []).map(m => m.id),
+    handoff: payload.handoff?.ticket_reference || null,
+    mode: payload.mode || null,
+  });
+}
+
+/** `force` re-renders regardless, for changes a poll cannot see: an upload
+ *  verdict, or action cards patched from the checklist. */
+async function refresh({ force = false } = {}) {
   if (state.busy) return;
   const payload = await api("GET", `/chat/conversations/${state.cid}/messages`);
   const messages = payload.messages || [];
@@ -295,8 +332,14 @@ async function refresh() {
     state.awayMarker = (unseen && messages.length >= unseen) ? messages[messages.length - unseen].id : undefined;
   }
 
-  renderThread(payload);
-  renderHandoff(payload.handoff);
+  // An idle poll must not touch the DOM: rebuilding would discard part-typed
+  // answers in an intake card and drop the caret.
+  const signature = threadSignature(payload);
+  if (force || signature !== state.threadSignature) {
+    state.threadSignature = signature;
+    renderThread(payload);
+    renderHandoff(payload.handoff);
+  }
 
   // A waiting customer shouldn't have to refresh to see a reviewer's reply.
   clearTimeout(state.polling);
@@ -306,10 +349,12 @@ async function refresh() {
   // as a message in this thread, so the customer sees it without doing anything.
   const awaitingFnol = (fnolCache || []).some(n =>
     ["SUBMITTED", "UNDER_REVIEW", "READY_TO_REGISTER", "REGISTERING"].includes(n.status));
-  if (payload.handoff || awaitingFnol) {
+  if (payload.handoff || awaitingFnol || payload.awaiting_review) {
     note.textContent = payload.handoff
       ? "Waiting on my colleague — this updates automatically."
-      : "Your notification is with our claims team — this updates automatically.";
+      : awaitingFnol
+      ? "Your notification is with our claims team — this updates automatically."
+      : "We're checking your documents — this updates automatically.";
     state.polling = setTimeout(async () => {
       // Refresh the notification list too, or the poll never learns it can stop.
       try { fnolCache = ((await api("GET", "/fnol")).notifications || [])
@@ -499,6 +544,66 @@ function bubble2(text) {
     el("div", { class: "bubble" }, text));
 }
 
+/** Re-draw the upload verdicts that belong after `anchorId`.
+ *
+ *  Called from renderThread, which clears the thread on every poll. Without
+ *  this the rejection explanation — the one thing telling the customer why
+ *  their document failed and how to fix it — would vanish a moment after it
+ *  appeared. `null` anchors verdicts for files sent before the first message. */
+function flushUploads(anchorId) {
+  for (const upload of state.uploads) {
+    if (upload.anchorId !== anchorId) continue;
+    if (upload.text) thread.append(bubble2(upload.text));
+    const host = el("div", { class: "msg-cards" });
+    if (upload.receipt) {
+      const holder = el("div");
+      holder.innerHTML = documentReceiptCard(upload.receipt);
+      if (holder.firstElementChild) host.append(holder.firstElementChild);
+    }
+    if (upload.rejection) host.append(rejectionCard(upload.rejection, upload.docId));
+    if (host.childElementCount) thread.append(host);
+  }
+}
+
+/** Bring already-rendered action cards up to date after an upload.
+ *
+ *  Cards are transient — the messages endpoint doesn't return them, so
+ *  renderThread replays them from state.cards, exactly as they were built on
+ *  the turn that produced them. An upload changes the checklist underneath
+ *  that cache, and without this the card keeps asking for a document the
+ *  customer has just sent.
+ *
+ *  The MISSING/REJECTED vs IN_REVIEW/UPLOADED split mirrors the one in
+ *  agents/document.py: what they still have to send, versus what is already
+ *  with us and needs nothing from them. */
+async function syncActionCards(claimId) {
+  let checklist;
+  try {
+    checklist = await api("GET", `/claims/${claimId}/checklist`);
+  } catch { return; }   // transient: the next assistant turn rebuilds it anyway
+
+  const mandatory = (checklist.items || []).filter(item => item.mandatory);
+  const outstanding = mandatory.filter(item => ["MISSING", "REJECTED"].includes(item.state));
+  const withUs = mandatory.filter(item => ["IN_REVIEW", "UPLOADED"].includes(item.state));
+
+  for (const cards of Object.values(state.cards)) {
+    for (const card of cards) {
+      if (card.card_type !== "action_needed" || card.payload?.claim_id !== claimId) continue;
+      card.payload.items = outstanding.map(item => ({
+        doc_type: item.doc_type,
+        label: item.doc_type.replace(/_/g, " "),
+        state: item.state,
+        guidance: item.guidance || "",
+      }));
+      card.payload.with_us = withUs.map(item => ({
+        doc_type: item.doc_type,
+        label: item.doc_type.replace(/_/g, " "),
+        state: item.state,
+      }));
+    }
+  }
+}
+
 function showVerdict(document_, docId, claim) {
   const label = humanise(document_.doc_type || "document");
   const rec = (document_.rejection || {}).recommendation;
@@ -519,17 +624,25 @@ function showVerdict(document_, docId, claim) {
     text = `I couldn't accept that ${label} — here's why:`;
   }
 
-  thread.append(bubble2(text));
+  // Recorded rather than appended: refresh() below rebuilds the whole thread,
+  // so anything written straight to the DOM here would be wiped a moment later.
+  // A rejection needs the full explanation card, not just a sentence.
+  state.uploads.push({
+    anchorId: state.lastMessageId,
+    text,
+    receipt: document_,
+    rejection: (document_.rejection && rec !== "ACCEPT" && document_.status !== "VERIFIED")
+      ? document_.rejection : null,
+    docId,
+  });
 
-  // A rejection needs the full explanation card, not a sentence.
-  if (document_.rejection && rec !== "ACCEPT" && document_.status !== "VERIFIED") {
-    const host = el("div", { class: "msg-cards" });
-    host.append(rejectionCard(document_.rejection, docId));
-    thread.append(host);
-  }
-  thread.scrollTop = thread.scrollHeight;
-  // Pull the checklist forward so the next card reflects what is still missing.
-  refresh();
+  // Cards already on the thread were built before this upload, and refresh()
+  // replays them from state.cards — so update that cache before re-rendering,
+  // or the card asks again for what was just sent.
+  syncActionCards(claim.id).then(async () => {
+    await refresh({ force: true });
+    thread.scrollTop = thread.scrollHeight;
+  });
 }
 
 document.getElementById("send").addEventListener("click", () => send());

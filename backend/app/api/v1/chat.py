@@ -208,7 +208,27 @@ async def get_messages(
         # Recomputed every poll: chips must follow the checklist, not the state
         # it was in when the conversation started.
         "suggestions": _suggestions(principal.customer_id),
+        # Something is with a handler, so a decision may land in this thread at
+        # any moment. The client polls on this: without it a customer watching
+        # the page sees nothing until they happen to send another message.
+        "awaiting_review": _awaiting_review(principal.customer_id),
     }
+
+
+def _awaiting_review(customer_id: str) -> bool:
+    """Is any document on an open claim waiting on a handler?"""
+    from app.repositories import claims as claim_repo
+
+    try:
+        claims = claim_repo.get_claims(customer_id)
+    except Exception:  # noqa: BLE001 - polling must never break the thread
+        return False
+    for claim in claims:
+        if claim["status"] in ("SETTLED", "REJECTED", "WITHDRAWN"):
+            continue
+        if claim_repo.checklist(claim["id"], customer_id)["with_us"]:
+            return True
+    return False
 
 
 @router.post("/conversations/{conversation_id}/messages")

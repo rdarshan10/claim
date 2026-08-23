@@ -4,7 +4,7 @@
    and the reset genuinely deletes chat history. They live in one bar so it is
    obvious they are the same category of thing. */
 
-import { api, session, esc, el, toast, withBusy } from "./api.js";
+import { api, esc, el, toast, withBusy } from "./api.js";
 
 /** Mount the bar into `host`. `onReset` fires after state is cleared so the
  *  page can rebuild whatever it was showing. */
@@ -48,7 +48,7 @@ export function mountDemoBar(host, { onReset } = {}) {
             Reset claims to the sample set</button>
           <div class="tiny" style="margin-top:7px;opacity:.8;">
             Removes claims created by running the intake flow and puts the
-            sample claims back exactly as they shipped. Staff only.
+            sample claims back exactly as they shipped. Resets every persona.
           </div>
         </div>
       </div>
@@ -175,31 +175,31 @@ export function mountDemoBar(host, { onReset } = {}) {
   $("demo-reset-chat").addEventListener("click", e => doReset("conversation", e.currentTarget));
   $("demo-reset-all").addEventListener("click", e => doReset("customer", e.currentTarget));
 
-  // Regenerating the claims book is staff-only and takes a few seconds, so it
-  // is separated from the everyday resets and asks first.
-  if (session.role === "agent" || session.role === "manager") {
-    $("demo-claims-row").classList.remove("hidden");
-    $("demo-reset-claims").addEventListener("click", async event => {
-      const ok = confirm("Reset the claims book? Claims created by running the "
-        + "intake flow will be deleted, and the sample claims regenerated "
-        + "exactly as they shipped.");
-      if (!ok) return;
-      await withBusy(event.currentTarget, async () => {
-        try {
-          const result = await api("POST", "/demo/reset", { json: { scope: "claims" } });
-          const c = result.cleared || {};
-          toast(`Claims reset — ${c.sample_claims_restored} sample claim(s) restored.`, "ok");
-          panel.classList.add("hidden");
-          onReset?.("claims");
-          // Every id held in this tab — claims, documents, the open conversation
-          // — was just deleted and rebuilt. Clearing caches is not enough: the
-          // page must be rebuilt from the new dataset or the next click fetches
-          // something that no longer exists.
-          setTimeout(() => window.location.reload(), 700);
-        } catch (error) { toast(error.message, "err"); }
-      });
+  // Regenerating the claims book takes a few seconds and discards anything
+  // created during a run, so it is separated from the everyday resets and asks
+  // first. Open to whoever is driving the demo, staff or customer — the book is
+  // shared, so this resets it for every persona, not just the one signed in.
+  $("demo-claims-row").classList.remove("hidden");
+  $("demo-reset-claims").addEventListener("click", async event => {
+    const ok = confirm("Reset the claims book? Claims created by running the "
+      + "intake flow will be deleted, and the sample claims regenerated "
+      + "exactly as they shipped. This affects every persona, not just you.");
+    if (!ok) return;
+    await withBusy(event.currentTarget, async () => {
+      try {
+        const result = await api("POST", "/demo/reset", { json: { scope: "claims" } });
+        const c = result.cleared || {};
+        toast(`Claims reset — ${c.sample_claims_restored} sample claim(s) restored.`, "ok");
+        panel.classList.add("hidden");
+        onReset?.("claims");
+        // Every id held in this tab — claims, documents, the open conversation
+        // — was just deleted and rebuilt. Clearing caches is not enough: the
+        // page must be rebuilt from the new dataset or the next click fetches
+        // something that no longer exists.
+        setTimeout(() => window.location.reload(), 700);
+      } catch (error) { toast(error.message, "err"); }
     });
-  }
+  });
 
   // The label shows what is live, so it has to be right before the panel opens.
   loadModels();

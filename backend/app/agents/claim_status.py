@@ -16,6 +16,58 @@ from app.services import timeline_prediction
 CLAIM_REF = re.compile(r"\bCLM-\d+\b", re.IGNORECASE)
 
 
+def _timeline_card(claim: dict, history: list, prediction: dict,
+                   checklist: dict) -> dict:
+    """The where-is-it card for one claim."""
+    return {
+        "card_type": "claim_timeline",
+        "payload": {
+            "claim_number": claim["claim_number"],
+            "claim_type": claim["claim_type"],
+            "status": claim["status"],
+            "status_meaning": timeline_prediction.stage_meaning(
+                claim["status"], awaiting_customer=bool(checklist["awaiting_customer"])),
+            "claimed_amount": claim.get("claimed_amount"),
+            "approved_amount": claim.get("approved_amount"),
+            "incident_date": claim.get("incident_date"),
+            "history": [
+                {"status": h["to_status"], "date": h["changed_at"][:10]} for h in history
+            ],
+            "prediction": prediction,
+            "outstanding_documents": checklist["awaiting_customer_labels"],
+        },
+    }
+
+
+# A customer with a long history should not get a wall of cards; the reply
+# still names every claim, and they can ask about any one by reference.
+MAX_OVERVIEW_CARDS = 3
+
+
+def _overview(state: GraphState, claims: list[dict]) -> GraphState:
+    """Answer about every open claim when the customer named none.
+
+    Each gets its own timeline card, and the facts carry all of them so the
+    reply speaks to the set rather than to one picked arbitrarily. Documents are
+    deliberately left out here: a to-do list per claim buries the answer to the
+    question actually asked. Naming a claim drops back into the single-claim
+    path, which does show what is outstanding.
+    """
+    state.facts = {
+        "claims": [_summary(c) for c in claims],
+        "open_claim_count": len(claims),
+        "note": ("This customer has more than one open claim. Give a one-line "
+                 "update on each, naming its reference, and ask which they want "
+                 "to go into. Do not answer as though there is only one."),
+    }
+    for claim in claims[:MAX_OVERVIEW_CARDS]:
+        history = tools.get_status_history(state.customer_id, claim["id"])
+        prediction = tools.predict_timeline(state.customer_id, claim["id"])
+        checklist = tools.get_required_documents(state.customer_id, claim["id"])
+        state.cards.append(_timeline_card(claim, history, prediction, checklist))
+    return state
+
+
 def run(state: GraphState) -> GraphState:
     claims = tools.get_claims(state.customer_id)
 
@@ -43,7 +95,14 @@ def run(state: GraphState) -> GraphState:
     if claim is None:
         open_claims = [c for c in claims
                        if c["status"] not in ("SETTLED", "REJECTED", "WITHDRAWN")]
-        claim = (open_claims or claims)[0]
+        candidates = open_claims or claims
+        # More than one and they named none: answer about all of them. Silently
+        # taking the first meant "what's happening with my claim" was answered
+        # about whichever sorted first, while the card below showed another —
+        # the reply and the card contradicting each other on screen.
+        if len(candidates) > 1:
+            return _overview(state, candidates)
+        claim = candidates[0]
 
     state.active_claim_id = claim["id"]
 
@@ -102,6 +161,11 @@ def run(state: GraphState) -> GraphState:
     if claim["status"] == "APPROVED" and state.sentiment == "calm":
         state.tone_profile = "celebratory"  # type: ignore[assignment]
 
+    # Order matters: they asked where their claim is, so answer that first. The
+    # timeline leads, and what we still need from them follows as the next step
+    # — opening with a to-do list reads as a demand rather than an answer.
+    state.cards.append(_timeline_card(claim, history, prediction, checklist))
+
     if checklist["outstanding_mandatory"]:
         state.cards.append({
             "card_type": "action_needed",
@@ -125,25 +189,6 @@ def run(state: GraphState) -> GraphState:
                 ],
             },
         })
-
-    state.cards.append({
-        "card_type": "claim_timeline",
-        "payload": {
-            "claim_number": claim["claim_number"],
-            "claim_type": claim["claim_type"],
-            "status": claim["status"],
-            "status_meaning": timeline_prediction.stage_meaning(
-                claim["status"], awaiting_customer=bool(checklist["awaiting_customer"])),
-            "claimed_amount": claim.get("claimed_amount"),
-            "approved_amount": claim.get("approved_amount"),
-            "incident_date": claim.get("incident_date"),
-            "history": [
-                {"status": h["to_status"], "date": h["changed_at"][:10]} for h in history
-            ],
-            "prediction": prediction,
-            "outstanding_documents": checklist["awaiting_customer_labels"],
-        },
-    })
     return state
 
 

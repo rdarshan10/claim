@@ -72,6 +72,17 @@ p { margin: 0 0 .7em; }
 a { color: var(--indigo-600); }
 
 /* ---------------------------------------------------------------- layout */
+/* The header is injected into #header-slot, and a sticky element can only
+   travel within its parent's box — which here is exactly the header's own
+   height, so it had nowhere to stick and scrolled away. The tab bar below it
+   did stick, which left it floating 60px down the page with content showing
+   through the gap. Sticking the slot gives the header somewhere to stay. */
+#header-slot {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
 .app-header {
   position: sticky;
   top: 0;
@@ -757,3 +768,8 @@ pre.doc-text {
 .pill.quiet { background: var(--surface-3); color: var(--ink-3); font-weight: 500; }
 
 .btn.small { padding: 5px 11px; font-size: 12.5px; }
+
+/* Upload receipt: one per document sent, so a batch reads as separate
+   outcomes. Status only — confidence scores belong to the staff surfaces. */
+.doc-receipt .check-ico { font-size: 17px; }
+.doc-receipt-note { margin-top: 7px; color: var(--ink-3); }
