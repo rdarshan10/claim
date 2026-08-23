@@ -272,10 +272,13 @@ export function receiptCard(payload) {
 
 const STATUS_LABEL = {
   COLLECTING: ["b-slate", "Still being filled in"],
-  SUBMITTED: ["b-blue", "With the claims team"],
-  UNDER_REVIEW: ["b-blue", "Being checked"],
+  // Verification wording: a notification has no claim and nobody assigned yet,
+  // so "with the claims team" promised more than is happening. It is being
+  // checked to see whether a claim can be opened.
+  SUBMITTED: ["b-blue", "Sent for verification"],
+  UNDER_REVIEW: ["b-blue", "Being verified"],
   INFO_REQUIRED: ["b-amber", "We need a bit more"],
-  READY_TO_REGISTER: ["b-blue", "Queued for registration"],
+  READY_TO_REGISTER: ["b-blue", "Verified — queued for registration"],
   REGISTERING: ["b-blue", "Being registered now"],
   REGISTERED: ["b-green", "Registered"],
   REJECTED: ["b-red", "Not taken forward"],

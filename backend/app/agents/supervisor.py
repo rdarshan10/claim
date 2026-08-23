@@ -56,6 +56,14 @@ INTENT_SIGNALS: dict[str, list[str]] = {
         r"\bwhen (?:was|did) (?:the|my|it)\b",
         r"\bhow much (?:am|did|is|was|will)\b",
         r"\bclaim (?:number|reference|ref)\b", r"\bclm-\d+\b",
+        # Asking after something already reported, not starting a new one. The
+        # new_claim patterns above need a verb ("report a loss"), so these bare
+        # nouns don't collide with them.
+        r"\bfnols?\b", r"\bnotifications? of loss\b", r"\bnotifications?\b",
+        # Counting what they already have. Kept to "how many claims" rather than
+        # a bare \bclaims?\b, which would pull knowledge questions like "what is
+        # the excess on my claim" over to this agent.
+        r"\bhow many claims?\b",
     ],
     "knowledge": [
         r"\bwhat is\b", r"\bwhat does .* mean\b", r"\bhow (?:do|does) .* work\b",

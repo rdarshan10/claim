@@ -79,16 +79,19 @@ def build(claim: dict) -> dict[str, str]:
         f"scene. Both drivers exchanged details.\n\n"
     )
 
-    licence = (
-        f"DRIVER AND VEHICLE LICENSING AGENCY\n"
-        f"DRIVING LICENCE\n\n"
-        f"Licence No: DRI-889231\n"
-        f"Name: {name}\n"
-        f"Date of issue: 2019-03-04\n"
-        f"Valid until: {{expiry}}\n"
-        f"Categories: B, BE\n"
-        f"Issued by: DVLA Swansea\n"
-    )
+    def licence_for(number: str) -> str:
+        return (
+            f"DRIVER AND VEHICLE LICENSING AGENCY\n"
+            f"DRIVING LICENCE\n\n"
+            f"Licence No: {number}\n"
+            f"Name: {name}\n"
+            f"Date of issue: 2019-03-04\n"
+            f"Valid until: {{expiry}}\n"
+            f"Categories: B, BE\n"
+            f"Issued by: DVLA Swansea\n"
+        )
+
+    licence = licence_for("DRI-889231")
 
     blurred = police.splitlines()
     for i in range(len(blurred) // 2, len(blurred)):
@@ -136,6 +139,16 @@ def build(claim: dict) -> dict[str, str]:
 
         # ---- unreadable ------------------------------------------------
         "13_CORRUPT_empty.txt": "",
+
+        # ---- a spare that also passes ------------------------------------
+        # A second valid licence, different number and expiry so its hash
+        # differs from 03. Testing "a handler rejected it, send another" needs a
+        # document that differs by content: re-sending the same file is caught
+        # by the sha256 dedup, which is correct but leaves nothing to replace it
+        # with. Upload 03 first, then this one.
+        "14_driving_licence_REPLACEMENT.txt":
+            licence_for("DRI-889232").replace(
+                "{expiry}", (date.today() + timedelta(days=1200)).isoformat()),
     }
 
 

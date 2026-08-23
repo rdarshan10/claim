@@ -91,11 +91,22 @@ async def decide(doc_id: str, body: DecisionRequest,
     execute("UPDATE fraud_signal SET review_status = 'REVIEWED' WHERE document_id = ?",
             (doc_id,))
 
+    # What the AI actually concluded is its recommendation, not the status it
+    # parked the document at. The pipeline never signs a document off itself —
+    # a clean one is left at NEEDS_REVIEW carrying "ACCEPT" for a handler to
+    # confirm (§11.6) — so comparing statuses counted every single decision as
+    # an override and pinned the rate at 100%, whichever way the handler ruled.
+    stored = document["rejection_payload"]
+    recommendation = (json.loads(stored).get("recommendation") if stored else None)
+    ai_verdict = {"ACCEPT": "VERIFIED", "REJECT": "REJECTED_RULES"}.get(
+        recommendation, previous)
+
     audit.record("human_override", actor_type=principal.role, actor_id=principal.name,
                  entity_type="document", entity_id=doc_id,
                  payload={"from": previous, "to": body.verdict, "note": body.note[:500],
-                          "ai_verdict": previous,
-                          "overturned": previous != body.verdict})
+                          "ai_verdict": ai_verdict,
+                          "ai_recommendation": recommendation,
+                          "overturned": body.verdict != ai_verdict})
 
     from app.documents.pipeline import _advance_claim
     _advance_claim(document["claim_id"])

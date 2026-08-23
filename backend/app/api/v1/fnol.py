@@ -183,9 +183,10 @@ async def submit(fnol_id: str,
     if record.get("conversation_id"):
         body = (
             f"Thanks — that's submitted. Your reference is **{record['reference']}**.\n\n"
-            f"Our claims team will check the details and register the claim on our "
-            f"system. I'll let you know here as soon as it has a claim number — "
-            f"you don't need to do anything in the meantime."
+            f"We'll verify the details you've given us, and once that's done a "
+            f"claim will be opened on our system. I'll let you know here as soon "
+            f"as it has a claim number — you don't need to do anything in the "
+            f"meantime."
         )
         execute(
             """INSERT INTO message (id, conversation_id, role, content, created_at)

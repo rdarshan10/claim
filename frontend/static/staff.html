@@ -865,7 +865,10 @@ async function openFnol(fnolId) {
   const data = await api("GET", `/staff/fnol/${fnolId}`);
   const record = data.request;
   const [cls, label] = FNOL_BADGE[record.status] || ["b-slate", record.status];
-  const canRegister = ["SUBMITTED", "UNDER_REVIEW", "READY_TO_REGISTER"].includes(record.status);
+  // Only once a reviewer has approved it. Registration opens a real claim in
+  // the core system, so "Mark ready to register" is the decision that unlocks
+  // it — offering the button on an untriaged notification let that be skipped.
+  const canRegister = record.status === "READY_TO_REGISTER";
 
   host.innerHTML = `
     <div class="panel-box" style="margin-bottom:14px;"><div class="inner">

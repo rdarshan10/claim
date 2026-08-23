@@ -135,7 +135,13 @@ def run_turn(
     elif state.intent not in ("human_request", "out_of_scope"):
         from app.fnol import intake as _intake
 
-        if _intake.open_for_customer(customer_id):
+        # An open intake captures the next message, because "yesterday" or
+        # "£400" is an answer to the question just asked and carries no intent
+        # signal of its own. But a plain question about existing claims is not
+        # an answer to anything — swallowing those meant a customer part-way
+        # through reporting an incident could not ask what else was on their
+        # account without abandoning the intake first.
+        if _intake.open_for_customer(customer_id) and not _asks_about_existing(message):
             state.intent = "new_claim"  # type: ignore[assignment]
 
     # --- node: keep an open case current --------------------------------
@@ -319,6 +325,22 @@ _AFFIRMATIVES = {
     "that would be good", "that works", "fine", "alright", "sounds good",
     "if you could", "if you would", "i would", "id like that", "i'd like that",
 }
+
+
+def _asks_about_existing(message: str) -> bool:
+    """Is this a question about claims already on the account?
+
+    Deliberately narrow: it has to read as a question *and* carry a strong
+    claim-status signal. An intake answer is typically a bare value — a date, an
+    amount, a place — so it matches neither, and the intake keeps capturing as
+    designed.
+    """
+    lowered = (message or "").strip().lower()
+    if "?" not in lowered and not re.match(r"^(how|what|when|which|where|do|does|is|are)\b",
+                                           lowered):
+        return False
+    intent, confidence = supervisor._heuristic_intent(lowered)
+    return intent == "claim_status" and confidence >= 0.7
 
 
 def _already_offered(state: GraphState) -> bool:

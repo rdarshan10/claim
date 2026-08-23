@@ -154,17 +154,11 @@ BY_TYPE: list[Field] = [
 ]
 
 CLOSING: list[Field] = [
-    Field(
-        key="estimated_amount",
-        question="Roughly how much do you think you're claiming for?",
-        kind="money",
-        hint="An estimate is fine — it only sets the initial reserve, and it "
-             "doesn't cap what you can claim.",
-        # Genuinely optional: plenty of people have no idea at this stage, and a
-        # nominal reserve is opened instead (see DEFAULT_RESERVE).
-        optional=True,
-        quick=["I don't know yet"],
-    ),
+    # Deliberately not asked: the customer is not asked to value their own loss
+    # at first notification. Registration opens a nominal reserve from
+    # DEFAULT_RESERVE, and the case handler sets the real figure when they
+    # assess the claim — that is their decision to make, on the evidence, not
+    # something to anchor on a number given before anyone has looked.
     Field(
         key="incident_report",
         question="Please upload anything you already have about the incident.",

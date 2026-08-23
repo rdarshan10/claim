@@ -139,8 +139,15 @@ def start(fnol_id: str, started_by: str) -> str:
     record = intake.get(fnol_id)
     if record is None:
         raise KeyError(fnol_id)
-    if record["status"] not in ("READY_TO_REGISTER", "UNDER_REVIEW", "SUBMITTED"):
-        raise ValueError(f"FNOL {record['reference']} is {record['status']}, not ready")
+    # Registration opens a real claim in the core system, so it takes a
+    # reviewer's approval first. SUBMITTED and UNDER_REVIEW used to be accepted
+    # here, which meant a notification could go straight from the customer to a
+    # registered claim with nobody having agreed it should be one — the triage
+    # step existed but nothing enforced it.
+    if record["status"] != "READY_TO_REGISTER":
+        raise ValueError(
+            f"FNOL {record['reference']} is {record['status']}. It must be "
+            f"approved for registration first.")
 
     run_id = str(uuid.uuid4())
     execute(
