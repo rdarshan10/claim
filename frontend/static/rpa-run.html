@@ -1,0 +1,147 @@
+<!--
+  Live view of one registration run.
+
+  Left: what the bot is doing, step by step, as it happens.
+  Right: what it is looking at — the browser frames it captured.
+
+  The bot runs headless on the server, so "the browser" here is the screenshot
+  stream rather than an embedded window. It is the same thing the handler would
+  be watching over its shoulder, and it stays afterwards as the record of what
+  was typed into the core system.
+-->
+<meta charset="utf-8">
+<title>Registration run</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/app.css">
+<style>
+  .split { display: grid; grid-template-columns: 380px 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 980px) { .split { grid-template-columns: 1fr; } }
+  .pane { border: 1px solid var(--line); border-radius: 12px; background: var(--surface);
+          overflow: hidden; }
+  .pane > header { padding: 11px 14px; border-bottom: 1px solid var(--line);
+                   font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+                   color: var(--ink-3); font-weight: 600; }
+  .pane .inner { padding: 13px 14px; }
+  .doing { list-style: none; margin: 0; padding: 0; }
+  .doing li { padding: 7px 0 7px 20px; position: relative; font-size: 13.5px;
+              border-bottom: 1px dashed var(--line); }
+  .doing li:last-child { border-bottom: 0; }
+  .doing li::before { content: "✓"; position: absolute; left: 0; color: var(--green); }
+  .doing li.s-warn::before { content: "!"; color: var(--amber); }
+  .doing li.s-error::before { content: "✕"; color: var(--red); }
+  .doing li.live::before { content: "▶"; color: var(--indigo-600); }
+  .doing .detail { color: var(--ink-3); font-size: 12.5px; margin-top: 2px; }
+  .screen { width: 100%; display: block; border-radius: 8px; border: 1px solid var(--line); }
+  .filmstrip { display: flex; gap: 7px; overflow-x: auto; margin-top: 10px; padding-bottom: 4px; }
+  .filmstrip img { height: 54px; border-radius: 5px; border: 1px solid var(--line);
+                   cursor: pointer; opacity: .55; }
+  .filmstrip img.on { opacity: 1; border-color: var(--indigo-600); }
+</style>
+
+<div id="header-slot"></div>
+
+<div class="container">
+  <div class="row-between" style="margin-bottom:14px;">
+    <div>
+      <h1 style="margin-bottom:4px;" id="title">Registering on POLARIS</h1>
+      <div class="tiny" id="sub">Starting…</div>
+    </div>
+    <a class="btn btn-sm" id="back" href="/staff">← Back to the notification</a>
+  </div>
+
+  <div id="alert"></div>
+
+  <div class="split">
+    <div class="pane">
+      <header>What it's doing</header>
+      <div class="inner"><ul class="doing" id="steps"></ul></div>
+    </div>
+    <div class="pane">
+      <header>What it's looking at</header>
+      <div class="inner">
+        <img class="screen" id="screen" alt="The bot's browser">
+        <div class="filmstrip" id="strip"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { api, requireAuth, mountHeader, wireHeader, esc, el, alertBox }
+  from "/static/js/api.js";
+
+if (!requireAuth("agent", "manager")) throw new Error("redirecting");
+document.getElementById("header-slot").innerHTML = mountHeader("Registration run");
+wireHeader();
+
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const runId = params.get("run");
+const fnolId = params.get("fnol");
+if (fnolId) $("back").href = `/staff?fnol=${encodeURIComponent(fnolId)}`;
+
+if (!runId) {
+  $("alert").innerHTML = alertBox("error", "No run id in the address.");
+  throw new Error("no run");
+}
+
+// Which frame the viewer is looking at. Null means "follow the run" — the newest
+// frame as it arrives. Clicking a thumbnail pins it so a live update doesn't
+// yank the picture away mid-look.
+let pinned = null;
+
+function paint(run) {
+  const steps = run.steps || [];
+  const frames = run.frames || [];
+  const running = run.status === "RUNNING";
+
+  $("sub").textContent = running
+    ? `Running — ${steps.length} step(s) so far`
+    : `${run.status} · ${steps.length} steps · ${frames.length} screenshots`;
+  if (run.result?.mode) {
+    $("title").textContent = run.result.mode === "agentic"
+      ? "Registering on POLARIS — agentic" : "Registering on POLARIS — scripted";
+  }
+
+  $("steps").innerHTML = steps.map((s, i) => `
+    <li class="s-${esc(s.state || "done")}${running && i === steps.length - 1 ? " live" : ""}">
+      ${esc(s.label)}
+      ${s.detail ? `<div class="detail">${esc(s.detail)}</div>` : ""}
+    </li>`).join("") || `<li class="live">Waiting for the browser…</li>`;
+
+  if (frames.length) {
+    const index = pinned == null ? frames.length - 1 : Math.min(pinned, frames.length - 1);
+    $("screen").src = frames[index].image;
+    $("screen").alt = frames[index].label || "";
+    $("strip").innerHTML = "";
+    frames.forEach((f, i) => {
+      const thumb = el("img", { src: f.image, title: f.label || "", alt: f.label || "" });
+      if (i === index) thumb.classList.add("on");
+      thumb.addEventListener("click", () => {
+        pinned = i === frames.length - 1 ? null : i;   // last thumb resumes following
+        paint(run);
+      });
+      $("strip").append(thumb);
+    });
+  }
+
+  if (run.status === "FAILED") {
+    $("alert").innerHTML = alertBox("error",
+      esc(run.result?.error || "The run failed — see the steps."));
+  } else if (run.status === "SUCCEEDED" && run.result?.claim_number) {
+    $("alert").innerHTML = alertBox("ok",
+      `Registered as <b>${esc(run.result.claim_number)}</b>. The customer has been told.`);
+  }
+}
+
+async function poll() {
+  const run = await api("GET", `/staff/rpa/${runId}`);
+  paint(run);
+  if (run.status === "RUNNING") setTimeout(poll, 1200);
+}
+
+poll().catch(error => {
+  $("alert").innerHTML = alertBox("error", esc(error.message));
+});
+</script>

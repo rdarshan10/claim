@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1 import auth, chat, claims, demo, documents, fnol, staff
+from app.api.v1 import auth, chat, claims, demo, documents, fnol, fnol_agentic, staff
 from app.config import get_settings
 from app.db import init_db, query
 
@@ -48,7 +48,7 @@ def create_app() -> FastAPI:
     )
 
     for router in (auth.router, claims.router, documents.router, chat.router,
-                   fnol.router, staff.router, demo.router):
+                   fnol.router, fnol_agentic.router, staff.router, demo.router):
         app.include_router(router, prefix=settings.api_prefix)
 
     @app.exception_handler(Exception)
@@ -120,6 +120,16 @@ def create_app() -> FastAPI:
         @app.get("/core-system", include_in_schema=False)
         async def core_system() -> FileResponse:
             return _page("core-system.html")
+
+        # Experiment: the scripted bot and the agentic one, side by side.
+        @app.get("/rpa-compare", include_in_schema=False)
+        async def rpa_compare() -> FileResponse:
+            return _page("rpa-compare.html")
+
+        # One run, live: the step log beside the browser it is driving.
+        @app.get("/rpa-run", include_in_schema=False)
+        async def rpa_run() -> FileResponse:
+            return _page("rpa-run.html")
     else:
         @app.get("/", include_in_schema=False)
         async def index() -> dict[str, Any]:

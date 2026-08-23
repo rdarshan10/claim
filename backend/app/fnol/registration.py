@@ -148,6 +148,13 @@ def start(fnol_id: str, started_by: str) -> str:
         raise ValueError(
             f"FNOL {record['reference']} is {record['status']}. It must be "
             f"approved for registration first.")
+    # A notification that already carries a claim is finished, whatever its
+    # status says. The status alone was enough until a second bot could move it;
+    # this is the fact that cannot drift, and a duplicate here means two claims
+    # on the books for one loss.
+    if record.get("claim_id"):
+        raise ValueError(
+            f"FNOL {record['reference']} is already registered as a claim.")
 
     run_id = str(uuid.uuid4())
     execute(

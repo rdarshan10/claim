@@ -1,0 +1,189 @@
+<!--
+  Side-by-side comparison of the two registration bots.
+
+  Left: the scripted path, which knows POLARIS's selectors in advance.
+  Right: the agentic path, which reads whatever form is on screen.
+
+  Both drive the same core system against the same notification, so the
+  interesting part is the difference in how they got there — and what each one
+  does when the form is not what it expected.
+-->
+<meta charset="utf-8">
+<title>Registration bots — side by side</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/app.css">
+<style>
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .compare { grid-template-columns: 1fr; } }
+  .lane { border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+          background: var(--surface); display: flex; flex-direction: column; }
+  .lane-head { padding: 12px 15px; border-bottom: 1px solid var(--line); }
+  .lane-head h3 { margin-bottom: 3px; }
+  .lane-body { padding: 13px 15px; }
+  .steps { list-style: none; margin: 0; padding: 0; }
+  .steps li { padding: 5px 0; border-bottom: 1px dashed var(--line); font-size: 13.5px; }
+  .steps li:last-child { border-bottom: 0; }
+  .steps .s-warn { color: var(--amber); }
+  .steps .s-error { color: var(--red); }
+  .steps .detail { color: var(--ink-3); font-size: 12.5px; }
+  .shot { width: 100%; border: 1px solid var(--line); border-radius: 8px; margin-top: 9px; }
+  .metrics-row { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 10px; }
+  .metrics-row div { font-size: 12.5px; color: var(--ink-3); }
+  .metrics-row b { display: block; font-size: 16px; color: var(--ink); }
+  .why { font-size: 12px; color: var(--ink-3); }
+</style>
+
+<div id="header-slot"></div>
+
+<div class="container">
+  <h1 style="margin-bottom:6px;">Registration bots — side by side</h1>
+  <p class="tiny" style="margin-bottom:16px;">
+    The same notification, registered two ways. The scripted bot has POLARIS's
+    field ids compiled into it. The agentic bot is told nothing about the form
+    and has to read it.
+  </p>
+
+  <div class="row" style="gap:9px; margin-bottom:16px; align-items:flex-end;">
+    <label class="field grow" style="max-width:340px;">
+      <span>Notification</span>
+      <select id="pick"></select>
+    </label>
+    <button class="btn btn-sm" id="run-scripted">Run scripted</button>
+    <button class="btn btn-primary btn-sm" id="run-agentic">Run agentic</button>
+    <button class="btn btn-ghost btn-sm" id="reload">Refresh</button>
+  </div>
+
+  <div id="alert"></div>
+
+  <div class="compare">
+    <div class="lane">
+      <div class="lane-head">
+        <h3>Scripted RPA</h3>
+        <span class="tiny">Hardcoded selectors — <code>#loss_type</code>, <code>#register_btn</code></span>
+      </div>
+      <div class="lane-body" id="lane-scripted"><span class="tiny">No run yet.</span></div>
+    </div>
+    <div class="lane">
+      <div class="lane-head">
+        <h3>Agentic</h3>
+        <span class="tiny">Reads the form, then maps the claim onto it</span>
+      </div>
+      <div class="lane-body" id="lane-agentic"><span class="tiny">No run yet.</span></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { api, session, requireAuth, mountHeader, wireHeader, esc, el, toast, alertBox }
+  from "/static/js/api.js";
+
+if (!requireAuth("agent", "manager")) throw new Error("redirecting");
+document.getElementById("header-slot").innerHTML = mountHeader("Bot comparison");
+wireHeader();
+
+const $ = id => document.getElementById(id);
+let polling = null;
+
+async function loadNotifications() {
+  // include_closed, because the comparison is most useful on notifications that
+  // have already been registered — the triage queue hides those by default.
+  const data = await api("GET", "/staff/fnol", { params: { include_closed: "true" } });
+  const items = data.requests || [];
+  const pick = $("pick");
+  pick.innerHTML = "";
+  for (const n of items) {
+    pick.append(el("option", { value: n.id }, `${n.reference} · ${n.status}`));
+  }
+  if (!items.length) {
+    $("alert").innerHTML = alertBox("info",
+      "No notifications of loss on file. Report one in the portal first.");
+  }
+  return items;
+}
+
+function stepList(run) {
+  const steps = run.steps || [];
+  if (!steps.length) return `<span class="tiny">No steps recorded.</span>`;
+  return `<ul class="steps">` + steps.map(s => `
+    <li class="s-${esc(s.state || "done")}">
+      ${esc(s.label)}
+      ${s.detail ? `<div class="detail">${esc(s.detail)}</div>` : ""}
+    </li>`).join("") + `</ul>`;
+}
+
+function renderLane(host, run, label) {
+  if (!run) { host.innerHTML = `<span class="tiny">No ${label} run yet.</span>`; return; }
+  const result = run.result || {};
+  const frames = run.frames || [];
+  const last = frames[frames.length - 1];
+  const warnings = (run.steps || []).filter(s => s.state === "warn").length;
+
+  host.innerHTML = `
+    <div class="row" style="gap:8px;align-items:center;">
+      <span class="badge ${run.status === "SUCCEEDED" ? "b-green"
+                        : run.status === "FAILED" ? "b-red" : "b-slate"}">
+        ${esc(run.status)}</span>
+      <span class="tiny">${esc(run.started_by || "")}</span>
+    </div>
+    <div class="metrics-row">
+      <div><b>${(run.steps || []).length}</b>steps</div>
+      <div><b>${frames.length}</b>screenshots</div>
+      <div><b>${warnings}</b>warnings</div>
+      ${result.discovered_fields != null
+        ? `<div><b>${result.discovered_fields}</b>fields read</div>` : ""}
+      ${result.claim_number ? `<div><b>${esc(result.claim_number)}</b>claim</div>` : ""}
+      ${result.core_system_status
+        ? `<div><b>${esc(result.core_system_status)}</b>core system</div>` : ""}
+    </div>
+    ${result.error ? alertBox("error", esc(result.error)) : ""}
+    ${(result.unmapped || []).length
+      ? alertBox("warn", "No data for: " + esc(result.unmapped.join(", "))) : ""}
+    ${stepList(run)}
+    ${(result.fields_filled || []).length ? `
+      <details class="disclose" style="margin-top:9px;">
+        <summary>What it decided, and why</summary>
+        <div class="body">${result.fields_filled.map(f =>
+          `<div><b>${esc(f.id)}</b> = ${esc(f.value)}
+           <div class="why">${esc(f.why || "")}</div></div>`).join("")}</div>
+      </details>` : ""}
+    ${last ? `<img class="shot" src="${last.image}" alt="${esc(last.label)}">` : ""}`;
+}
+
+async function refresh() {
+  const fnolId = $("pick").value;
+  if (!fnolId) return;
+  const data = await api("GET", `/staff/fnol/${fnolId}/compare`);
+  renderLane($("lane-scripted"), data.scripted, "scripted");
+  renderLane($("lane-agentic"), data.agentic, "agentic");
+
+  // Keep polling only while something is still moving.
+  const running = [data.scripted, data.agentic]
+    .some(r => r && r.status === "RUNNING");
+  clearTimeout(polling);
+  if (running) polling = setTimeout(refresh, 2000);
+}
+
+async function launch(path, button) {
+  const fnolId = $("pick").value;
+  if (!fnolId) return;
+  button.disabled = true;
+  try {
+    await api("POST", `/staff/fnol/${fnolId}/${path}`);
+    toast("Run started.", "ok");
+    refresh();
+  } catch (error) {
+    toast(error.message, "err");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$("run-scripted").addEventListener("click", e => launch("register", e.currentTarget));
+$("run-agentic").addEventListener("click", e => launch("register-agentic", e.currentTarget));
+$("reload").addEventListener("click", refresh);
+$("pick").addEventListener("change", refresh);
+
+await loadNotifications();
+await refresh();
+</script>

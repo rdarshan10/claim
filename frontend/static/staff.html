@@ -218,6 +218,9 @@ table.data th.num { text-align: right; }
   <!-- Cost, savings, AI quality and the audit trail are manager-only
        oversight rather than claim work, so they have their own page. -->
   <a class="tab tab-link" href="/oversight" id="oversight-link">Oversight →</a>
+  <!-- Experiment: the scripted registration bot against the one that reads the
+       form. Open to any handler — it drives the same core system they do. -->
+  <a class="tab tab-link" href="/rpa-compare" id="compare-link">Bot comparison →</a>
 </nav>
 
 <div class="container-wide">
@@ -916,7 +919,17 @@ async function openFnol(fnolId) {
         <div class="row-between" style="margin-bottom:12px;">
           <div class="tiny">The bot signs in and completes the registration form the way a
             handler would. Every keystroke is recorded below.</div>
-          ${canRegister ? `<button class="btn btn-primary" id="run-rpa">▶ Register on POLARIS</button>` : ""}
+          ${canRegister ? `
+          <div class="row" style="gap:8px;align-items:center;">
+            <!-- Which bot fills the form. Scripted knows POLARIS's field ids in
+                 advance; agentic reads whatever form is on screen and maps the
+                 claim onto it. Same core system, same audit trail either way. -->
+            <select id="bot-mode" class="fnol-input" style="width:auto;">
+              <option value="register">Scripted RPA</option>
+              <option value="register-agentic">Agentic (reads the form)</option>
+            </select>
+            <button class="btn btn-primary" id="run-rpa">▶ Register on POLARIS</button>
+          </div>` : ""}
         </div>
         <div id="rpa-view"></div>
       </div></div>` : ""}
@@ -964,10 +977,16 @@ async function openFnol(fnolId) {
   // the bot
   if (data.run) renderRun(data.run);
   document.getElementById("run-rpa")?.addEventListener("click", async e => {
+    // Whichever bot the handler picked. Both return a run id and are polled
+    // identically, because the agentic path writes to the same run record.
+    const mode = document.getElementById("bot-mode")?.value || "register";
     await withBusy(e.currentTarget, async () => {
       try {
-        const started = await api("POST", `/staff/fnol/${fnolId}/register`);
-        pollRun(started.run_id);
+        const started = await api("POST", `/staff/fnol/${fnolId}/${mode}`);
+        // Watch it work: the run page puts the step log beside the browser the
+        // bot is driving. The inline view below still replays it afterwards.
+        location.href = `/rpa-run?run=${encodeURIComponent(started.run_id)}`
+                      + `&fnol=${encodeURIComponent(fnolId)}`;
       } catch (error) { toast(error.message, "err"); }
     });
   });
