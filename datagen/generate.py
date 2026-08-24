@@ -457,14 +457,145 @@ def generate(seed: int, customers: int, claims_per: int) -> dict:
     print("Verifying seeded documents...")
     verdicts = verify_seeded_documents()
 
+    # Clones come last, after verification, so they copy documents that already
+    # carry their verdicts rather than racing the pipeline for them.
+    for source, name, email in CLONE_PERSONAS:
+        clone_persona(source, name, email)
+        print(f"Cloned {source} -> {name} <{email}>")
+
     return {
         "verdicts": verdicts,
-        "customers": len(people),
+        "customers": len(people) + len(CLONE_PERSONAS),
         "documents": len(labels),
         "kb_chunks": sum(len(e["chunks"]) for e in KB),  # type: ignore[arg-type]
         "labels_file": str(labels_path),
-        "demo_logins": [p[1] for p in personas],
+        "demo_logins": [p[1] for p in personas] + [c[2] for c in CLONE_PERSONAS],
     }
+
+
+# --------------------------------------------------------------------------
+# Cloned personas
+# --------------------------------------------------------------------------
+# A second customer whose file is identical to an existing persona's, for demos
+# that need two people in the same situation. Defined as a clone rather than a
+# sixth entry in ``personas`` for two reasons: the generator's rng would give a
+# new persona its own amounts and dates, so it would not actually match; and
+# adding to that list shifts the ``user{i}@example.com`` numbering, which would
+# silently rename the fifteen generic accounts.
+CLONE_PERSONAS = [
+    ("Priya Sharma", "Emma Clarke", "emma@example.com"),
+]
+
+
+def clone_persona(source_name: str, new_name: str, new_email: str) -> None:
+    """Copy a persona's whole file onto a new customer.
+
+    Everything is carried over — policy, claim, documents with their verdicts
+    and confidences, the checklist, the rule-by-rule validation evidence, the
+    status history and any fraud signals. Three things are rewritten rather
+    than copied, because a literal copy would be broken:
+
+      * the rendered document text, which names the claimant throughout — left
+        alone, the clone's licence would carry the wrong name and VR-01 would
+        reject it;
+      * the sha256 that follows from that rewrite, which also keeps the
+        cross-claim duplicate check from reading the copy as the original;
+      * the ids, and the policy and claim numbers the schema holds unique.
+    """
+    import hashlib
+
+    conn = connect()
+    conn.row_factory = __import__("sqlite3").Row
+    cur = conn.cursor()
+
+    def insert(table: str, record: dict) -> None:
+        cur.execute(f"INSERT INTO {table} ({', '.join(record)}) "
+                    f"VALUES ({', '.join('?' * len(record))})", list(record.values()))
+
+    def renamed(value: str | None) -> str | None:
+        if not value:
+            return value
+        first = source_name.split()[0]
+        return value.replace(source_name, new_name).replace(first, new_name.split()[0])
+
+    src = cur.execute("SELECT * FROM customer WHERE full_name = ?", (source_name,)).fetchone()
+    if src is None:
+        return
+    email_hmac = crypto.blind_index(new_email)
+    if cur.execute("SELECT id FROM customer WHERE email_hmac = ?", (email_hmac,)).fetchone():
+        conn.close()
+        return
+
+    # Stable across reseeds, exactly as the seeded personas are, so a JWT issued
+    # before a reset still points at a customer that exists after it.
+    cust_id = stable_id("customer", new_email)
+    insert("customer", {
+        "id": cust_id, "full_name": new_name,
+        "email_enc": crypto.encrypt(new_email), "email_hmac": email_hmac,
+        "phone_enc": src["phone_enc"], "created_at": src["created_at"],
+    })
+
+    for policy in cur.execute("SELECT * FROM policy WHERE customer_id = ?",
+                              (src["id"],)).fetchall():
+        pol_id = stable_id("policy", new_email, policy["policy_number"])
+        pol_number = "POL%d" % (int(cur.execute(
+            "SELECT MAX(CAST(SUBSTR(policy_number, 4) AS INTEGER)) n FROM policy"
+        ).fetchone()["n"]) + 1)
+        record = dict(policy)
+        record.update(id=pol_id, customer_id=cust_id, policy_number=pol_number)
+        insert("policy", record)
+
+        for claim in cur.execute("SELECT * FROM claim WHERE policy_id = ?",
+                                 (policy["id"],)).fetchall():
+            claim_id = stable_id("claim", new_email, claim["claim_number"])
+            claim_number = "CLM-%d" % (int(cur.execute(
+                "SELECT MAX(CAST(SUBSTR(claim_number, 5) AS INTEGER)) n FROM claim"
+            ).fetchone()["n"]) + 1)
+            record = dict(claim)
+            record.update(id=claim_id, policy_id=pol_id, claim_number=claim_number)
+            insert("claim", record)
+
+            for doc in cur.execute("SELECT * FROM document WHERE claim_id = ?",
+                                   (claim["id"],)).fetchall():
+                doc_id = str(uuid.uuid4())
+                src_path = Path(doc["storage_key"])
+                dst_path = src_path.parent / f"{doc_id}_{src_path.name.split('_', 1)[-1]}"
+                sha = doc["sha256"]
+                if src_path.exists():
+                    text = renamed(src_path.read_text(encoding="utf-8", errors="replace"))
+                    dst_path.write_text(text or "", encoding="utf-8")
+                    sha = hashlib.sha256(dst_path.read_bytes()).hexdigest()
+
+                record = dict(doc)
+                record.update(
+                    id=doc_id, claim_id=claim_id, storage_key=str(dst_path), sha256=sha,
+                    extracted_fields=renamed(doc["extracted_fields"]),
+                    rejection_payload=(renamed(doc["rejection_payload"]) or "").replace(
+                        doc["id"], doc_id) or None,
+                )
+                insert("document", record)
+
+                for check in cur.execute(
+                        "SELECT * FROM document_validation WHERE document_id = ?",
+                        (doc["id"],)).fetchall():
+                    row = dict(check)
+                    row.update(id=str(uuid.uuid4()), document_id=doc_id,
+                               details=renamed(row.get("details")))
+                    insert("document_validation", row)
+
+            for table in ("required_document", "claim_status_history", "fraud_signal"):
+                for row in cur.execute(f"SELECT * FROM {table} WHERE claim_id = ?",
+                                       (claim["id"],)).fetchall():
+                    record = dict(row)
+                    record.update(id=str(uuid.uuid4()), claim_id=claim_id)
+                    # The signal's document belongs to the source claim; pointing
+                    # at it from here would cross the two customers' files.
+                    if table == "fraud_signal":
+                        record["document_id"] = None
+                    insert(table, record)
+
+    conn.commit()
+    conn.close()
 
 
 def main() -> None:

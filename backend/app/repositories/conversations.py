@@ -79,23 +79,36 @@ def add_message(conversation_id: str, role: str, content: str, *,
 
 def thread(conversation_id: str, since: str | None = None,
            limit: int = 200) -> list[dict[str, Any]]:
-    """The full shared thread, oldest first. ``since`` is an ISO timestamp."""
+    """The shared thread, oldest first. ``since`` is an ISO timestamp.
+
+    ``limit`` takes the most recent messages, not the first ones. Ordering ASC
+    and cutting at the limit meant a long conversation opened on its opening
+    lines and never reached the end: the customer saw their first exchange with
+    the newest reply nowhere on screen, and every card with it.
+
+    ``rowid`` breaks ties. Timestamps carry microseconds so collisions are rare,
+    but seeded and system-written messages share one, and a thread that reorders
+    itself between polls reads as messages moving on their own.
+    """
     if since:
+        # The incremental case genuinely wants the oldest first: it is fetching
+        # what arrived after the last poll, and the next poll continues from the
+        # newest timestamp it saw, so nothing is skipped by cutting the tail.
         rows = query(
             """SELECT id, role, content, author_name, intent, sentiment, citations,
-                      source_note, relay_source, created_at
+                      cards, source_note, relay_source, created_at
                FROM message WHERE conversation_id = ? AND created_at > ?
-               ORDER BY created_at ASC LIMIT ?""",
+               ORDER BY created_at ASC, rowid ASC LIMIT ?""",
             (conversation_id, since, limit),
         )
     else:
-        rows = query(
+        rows = list(reversed(query(
             """SELECT id, role, content, author_name, intent, sentiment, citations,
-                      source_note, relay_source, created_at
+                      cards, source_note, relay_source, created_at
                FROM message WHERE conversation_id = ?
-               ORDER BY created_at ASC LIMIT ?""",
+               ORDER BY created_at DESC, rowid DESC LIMIT ?""",
             (conversation_id, limit),
-        )
+        )))
     out = []
     for row in rows:
         item = dict(row)
@@ -103,6 +116,12 @@ def thread(conversation_id: str, since: str | None = None,
             item["citations"] = json.loads(item.get("citations") or "[]")
         except json.JSONDecodeError:
             item["citations"] = []
+        # Cards are replayed with the message they belonged to, so a refreshed
+        # thread still shows the checklist the reply refers to.
+        try:
+            item["cards"] = json.loads(item.get("cards") or "[]")
+        except json.JSONDecodeError:
+            item["cards"] = []
         out.append(item)
     return out
 

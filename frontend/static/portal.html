@@ -284,6 +284,12 @@ function cardHandlers(host) {
       if (claimId) state.activeClaimId = claimId;
       document.getElementById("chat-file").click();
     },
+    // Correcting the assumed claim. Pinning it first means the re-ask resolves
+    // to the claim they picked rather than guessing the same way twice.
+    onSwitchClaim: (claimId, claimNumber) => {
+      if (claimId) state.activeClaimId = claimId;
+      send(`Show me what's outstanding on ${claimNumber}.`);
+    },
     onSubmitted: result => {
       if (result?.card) renderCard(host, result.card, cardHandlers(host));
       claimsCache = null;   // a notification now exists
@@ -324,6 +330,16 @@ async function refresh({ force = false } = {}) {
   if (state.busy) return;
   const payload = await api("GET", `/chat/conversations/${state.cid}/messages`);
   const messages = payload.messages || [];
+
+  // Seed the card cache from the thread itself. state.cards only ever held what
+  // arrived live, so a refresh replayed every reply stripped of its cards —
+  // leaving "the list below this message" with nothing below it. Live entries
+  // win: an action card patched after an upload is newer than the stored copy.
+  for (const message of messages) {
+    if (message.cards?.length && !state.cards[message.id]) {
+      state.cards[message.id] = message.cards;
+    }
+  }
 
   // Only mark the divider once per resumed session; polling shouldn't keep
   // re-announcing it.

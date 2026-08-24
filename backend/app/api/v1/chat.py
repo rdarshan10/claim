@@ -31,16 +31,27 @@ def _load_history(conversation_id: str, limit: int = 10) -> list[dict[str, Any]]
     return [dict(row) for row in reversed(rows)]
 
 
+def _stored_claim(conversation_id: str) -> str | None:
+    """The claim this thread is on, as last answered about.
+
+    Server-side because the browser's copy dies with the tab: a refresh replays
+    the messages but not which claim they were about.
+    """
+    row = query_one("SELECT active_claim_id FROM conversation WHERE id = ?",
+                    (conversation_id,))
+    return row["active_claim_id"] if row else None
+
+
 def _persist(conversation_id: str, role: str, content: str,
              intent: str | None = None, sentiment: str | None = None,
-             citations: list | None = None) -> str:
+             citations: list | None = None, cards: list | None = None) -> str:
     message_id = str(uuid.uuid4())
     execute(
         """INSERT INTO message (id, conversation_id, role, content, intent, sentiment,
-                                citations, created_at)
-           VALUES (?,?,?,?,?,?,?,?)""",
+                                citations, cards, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (message_id, conversation_id, role, content, intent, sentiment,
-         json.dumps(citations or []), _now()),
+         json.dumps(citations or []), json.dumps(cards or []), _now()),
     )
     return message_id
 
@@ -247,6 +258,10 @@ async def post_message(
     history = _load_history(conversation_id)
     _persist(conversation_id, "user", body.message)
 
+    # The client's claim wins when it sends one — it reflects what the customer
+    # is looking at right now. Falling back to the stored claim is what survives
+    # a page refresh, which resets the browser's copy to nothing and used to
+    # drop the thread onto the newest claim mid-conversation.
     state = await asyncio.to_thread(
         graph.run_turn,
         customer_id=principal.customer_id,
@@ -254,12 +269,17 @@ async def post_message(
         message=body.message,
         history=history,
         conversation_id=conversation_id,
-        active_claim_id=body.claim_id,
+        active_claim_id=body.claim_id or _stored_claim(conversation_id),
         handoff=_handoff_context(conversation_id, principal.customer_id),
     )
 
+    if state.active_claim_id:
+        execute("UPDATE conversation SET active_claim_id = ? WHERE id = ?",
+                (state.active_claim_id, conversation_id))
+
     message_id = _persist(conversation_id, "assistant", state.reply,
-                          state.intent, state.sentiment, state.citations)
+                          state.intent, state.sentiment, state.citations,
+                          state.cards)
 
     return {
         "message_id": message_id,

@@ -199,12 +199,28 @@ export function renderCard(host, card, handlers = {}, replay = false) {
         ? `for ${esc(payload.claim_number)}`
         : `We're checking what you've sent for ${esc(payload.claim_number)}`;
 
+      // Where else the customer could be looking. When the claim was a guess the
+      // line says so first — silently picking reads as "these are your
+      // documents" and could have them attaching evidence to the wrong claim.
+      // The switch itself is offered either way, so the correction is reversible.
+      const others = payload.other_claims || [];
+      const switcher = others.length
+        ? `<div class="tiny action-assumed">
+             ${payload.assumed ? "Showing your most recent claim. " : ""}
+             ${others.map(c =>
+               `<button class="link-btn" data-switch="${esc(c.claim_id)}"
+                        data-switch-number="${esc(c.claim_number)}"
+                 >Switch to ${esc(c.claim_number)}</button>`).join(" ")}
+           </div>`
+        : "";
+
       wrap.innerHTML = `
         <div class="action-head">
           <span class="action-ico">${items.length ? "📋" : "✅"}</span>
           <div class="grow">
             <b>${esc(heading)}</b>
             <div class="tiny">${sub}</div>
+            ${switcher}
           </div>
         </div>
         ${items.length ? `<div class="action-items">
@@ -234,6 +250,11 @@ export function renderCard(host, card, handlers = {}, replay = false) {
 
       wrap.querySelector("[data-upload]")?.addEventListener("click", () => {
         handlers.onUpload?.(payload.claim_id);
+      });
+      wrap.querySelectorAll("[data-switch]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          handlers.onSwitchClaim?.(btn.dataset.switch, btn.dataset.switchNumber);
+        });
       });
       break;
     }

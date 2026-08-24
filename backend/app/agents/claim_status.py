@@ -13,7 +13,13 @@ from app.agents.state import GraphState
 from app.agents.tools import claim_tools as tools
 from app.services import timeline_prediction
 
-CLAIM_REF = re.compile(r"\bCLM-\d+\b", re.IGNORECASE)
+# Asking about claims in the plural is asking about the whole file, not the one
+# the thread happens to be sitting on. Without this the claim carried over from
+# a previous turn swallowed "what are my claims" and answered about one of them,
+# which reads as though the others had gone.
+ALL_CLAIMS = re.compile(
+    r"\b(?:claims|both|either|each\s+claim|every\s+claim|all\s+of\s+them)\b",
+    re.IGNORECASE)
 
 # How customers name a claim when they don't have its reference to hand.
 CLAIM_TYPE_WORDS: dict[str, tuple[str, ...]] = {
@@ -192,27 +198,29 @@ def run(state: GraphState) -> GraphState:
         return state
 
     # Resolve which claim the customer means.
-    claim = None
-    if match := CLAIM_REF.search(state.message):
-        claim = tools.find_claim_by_number(state.customer_id, match.group(0))
-        if claim is None:
-            # Never confirm or deny another customer's claim (UC-N1).
-            state.facts = {
-                "claims": [_summary(c) for c in claims],
-                "lookup_failed": True,
-                "note": ("No claim with that reference exists on this customer's account. "
-                         "Do not speculate about who it might belong to. Offer to look up "
-                         "the claims listed above instead."),
-            }
-            return state
-    else:
+    claim, explicit = tools.resolve_reference(state.customer_id, state.message)
+    if explicit and claim is None:
+        # Never confirm or deny another customer's claim (UC-N1).
+        state.facts = {
+            "claims": [_summary(c) for c in claims],
+            "lookup_failed": True,
+            "note": ("No claim with that reference exists on this customer's account. "
+                     "Do not speculate about who it might belong to. Offer to look up "
+                     "the claims listed above instead."),
+        }
+        return state
+    if claim is None:
         # "the motor one" is as specific as a reference number when only one
         # claim has that type. This has to be checked BEFORE the claim carried
         # over from the previous turn: otherwise a follow-up naming a different
         # claim keeps answering about the old one, and the reply names the claim
         # the customer asked for while the cards below show the sticky one.
         claim = _match_by_type(state.message, claims)
-        if claim is None and state.active_claim_id:
+        # The sticky claim is context, not an instruction. A plural ask overrides
+        # it for the same reason a named reference does: the customer has told us
+        # what they want, and it is not the one thing the thread was last on.
+        if (claim is None and state.active_claim_id
+                and not ALL_CLAIMS.search(state.message or "")):
             claim = tools.get_claim_detail(state.customer_id, state.active_claim_id)
 
     if claim is None:

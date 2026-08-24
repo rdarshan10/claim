@@ -7,17 +7,47 @@ and no tool can mutate a claim decision — the capability simply does not exist
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.audit import logger as audit
 from app.repositories import claims as repo
 from app.services import timeline_prediction
 
+# "CLM-88430" written out. Unambiguous: nothing else in a message looks like it,
+# so failing to find it is worth saying out loud rather than answering about
+# some other claim.
+CLAIM_REF = re.compile(r"\bCLM-\d+\b", re.IGNORECASE)
+
+# The same claim, typed the way people actually type it — "what's left on 88430".
+# A bare number could be anything (an invoice, a year, an amount), so it is only
+# ever accepted when it turns out to name one of this customer's claims.
+BARE_REF = re.compile(r"\b\d{4,}\b")
+
 
 def _audited(name: str, customer_id: str, args: dict[str, Any], result_size: int) -> None:
     audit.record("tool_call", actor_type="agent", actor_id=name,
                  entity_type="customer", entity_id=customer_id,
                  payload={"tool": name, "args": args, "results": result_size})
+
+
+def resolve_reference(customer_id: str, message: str) -> tuple[dict[str, Any] | None, bool]:
+    """Which claim a message names, if any.
+
+    Returns ``(claim, was_explicit)``. ``was_explicit`` marks a written-out
+    ``CLM-`` reference, which the caller should refuse to guess past when it
+    does not resolve — a bare number that matches nothing is far more likely to
+    be an invoice total than a claim the customer cannot see.
+    """
+    text = message or ""
+    if match := CLAIM_REF.search(text):
+        return find_claim_by_number(customer_id, match.group(0)), True
+
+    for digits in BARE_REF.findall(text):
+        claim = find_claim_by_number(customer_id, f"CLM-{digits}")
+        if claim is not None:
+            return claim, False
+    return None, False
 
 
 def get_claims(customer_id: str) -> list[dict[str, Any]]:

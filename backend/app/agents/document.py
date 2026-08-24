@@ -39,14 +39,44 @@ def run(state: GraphState) -> GraphState:
         state.facts = {"claims": [], "note": "This customer has no claims on file."}
         return state
 
-    claim = None
-    if state.active_claim_id:
+    # A reference in the message wins over carried context: it is the customer
+    # telling us which claim they mean, and the thread's active claim may well
+    # be a different one they were looking at a moment ago.
+    claim, explicit = tools.resolve_reference(state.customer_id, state.message)
+    if explicit and claim is None:
+        # Never confirm or deny another customer's claim (UC-N1), and never
+        # quietly answer about a different one — a checklist for the wrong claim
+        # reads as fact and would have them chasing documents they do not owe.
+        state.facts = {
+            "claims": [{"claim_number": c["claim_number"], "status": c["status"]}
+                       for c in claims],
+            "lookup_failed": True,
+            "note": ("No claim with that reference exists on this customer's "
+                     "account. Do not speculate about who it might belong to, "
+                     "and do not answer about a different claim. Offer the "
+                     "claims listed above instead."),
+        }
+        return state
+    if claim is None and state.active_claim_id:
         claim = tools.get_claim_detail(state.customer_id, state.active_claim_id)
+
+    # Nothing named it and the thread was not already on one, so the newest open
+    # claim is a guess. With a single claim that guess cannot be wrong; with two
+    # it can be, and a checklist reads as fact — so the card has to say it chose.
+    assumed = False
+    open_claims = [c for c in claims
+                   if c["status"] not in ("SETTLED", "REJECTED", "WITHDRAWN")]
     if claim is None:
-        open_claims = [c for c in claims
-                       if c["status"] not in ("SETTLED", "REJECTED", "WITHDRAWN")]
         claim = (open_claims or claims)[0]
+        assumed = len(open_claims) > 1
     state.active_claim_id = claim["id"]
+
+    # Offered whenever there is somewhere else to go, not only when the claim was
+    # guessed. Confining it to guesses made the correction one-way: switching to
+    # the right claim left a card with no route back, so returning meant knowing
+    # the reference number — which is the thing the switch existed to avoid.
+    alternatives = [{"claim_id": c["id"], "claim_number": c["claim_number"]}
+                    for c in open_claims if c["id"] != claim["id"]]
 
     checklist = tools.get_required_documents(state.customer_id, claim["id"])
     documents = tools.get_document_status(state.customer_id, claim["id"])
@@ -95,6 +125,21 @@ def run(state: GraphState) -> GraphState:
         ],
     }
 
+    # Which claim this to-do list belongs to, shown above it — but only where
+    # that is genuinely in question. With one claim there is nothing to confuse
+    # and the status card is just noise above the thing they asked for; with
+    # several, a bare checklist gives no way to tell whether it is the right
+    # one. Deferred import because claim_status imports this module.
+    if len(claims) > 1 and not any(c["card_type"] == "claim_timeline"
+                                   for c in state.cards):
+        from app.agents.claim_status import _timeline_card
+        state.cards.append(_timeline_card(
+            claim,
+            tools.get_status_history(state.customer_id, claim["id"]),
+            tools.predict_timeline(state.customer_id, claim["id"]),
+            checklist,
+        ))
+
     # When something is outstanding, the customer needs to act, not just read a
     # list — the action card carries the guidance and the attach button. The
     # full checklist is only worth showing once there is nothing left to do,
@@ -109,6 +154,8 @@ def run(state: GraphState) -> GraphState:
             "payload": {
                 "claim_id": claim["id"],
                 "claim_number": claim["claim_number"],
+                "assumed": assumed,
+                "other_claims": alternatives,
                 "items": [
                     {"doc_type": item["doc_type"],
                      "label": item["doc_type"].replace("_", " "),

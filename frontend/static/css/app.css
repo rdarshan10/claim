@@ -704,6 +704,14 @@ pre.doc-text {
 }
 .action-card.all-clear { border-left-color: var(--green); }
 .action-card.all-clear .action-ico { background: var(--green-bg); }
+/* Says the claim was assumed, and offers the correction inline. */
+.action-assumed { margin-top: 3px; color: var(--ink-3); }
+.link-btn {
+  background: none; border: 0; padding: 0; font: inherit; cursor: pointer;
+  color: var(--indigo-600); text-decoration: underline;
+}
+.link-btn:hover { text-decoration: none; }
+.link-btn:focus-visible { outline: 2px solid var(--indigo-600); outline-offset: 2px; }
 .with-us {
   margin-top: 11px; padding-top: 10px; border-top: 1px solid var(--line);
 }

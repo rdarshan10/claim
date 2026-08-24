@@ -159,6 +159,12 @@ async function loadAdmin() {
     : "£" + Number(g).toLocaleString(undefined,
         { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // A model with no published rate prices at zero, which is not the same as
+  // free — every figure derived from those calls understates the real cost by
+  // an unknown amount. Showing "0.00p" invites the reader to believe it, so
+  // anything priced off an incomplete meter reads as unknown instead.
+  const priced = g => spend.fully_priced ? money(g) : "—";
+
   const card = (label, value, sub) => `
     <div class="kpi">
       <div class="kpi-label">${label}</div>
@@ -177,13 +183,15 @@ async function loadAdmin() {
     </div>
 
     <div class="kpi-row">
-      ${card("Spend to date", money(spend.gbp),
-             `${num(spend.llm_calls)} call(s) · ${num(spend.tokens_in + spend.tokens_out)} tokens`)}
-      ${card("Cost per customer turn", money(unit.gbp_per_turn),
+      ${card("Spend to date", priced(spend.gbp),
+             spend.fully_priced
+               ? `${num(spend.llm_calls)} call(s) · ${num(spend.tokens_in + spend.tokens_out)} tokens`
+               : `${num(spend.llm_calls)} call(s) · ${num(spend.tokens_in + spend.tokens_out)} tokens · rate unpublished`)}
+      ${card("Cost per customer turn", priced(unit.gbp_per_turn),
              `measured over ${num(unit.turns_measured)} turn(s)`)}
-      ${card("Cost per contact", money(unit.gbp_per_contact),
+      ${card("Cost per contact", priced(unit.gbp_per_contact),
              `at ${unit.turns_per_contact} turns per contact`)}
-      ${card("Saved by caching", money(spend.cache_saved_gbp),
+      ${card("Saved by caching", priced(spend.cache_saved_gbp),
              `${num(spend.cache_hits)} answer(s) served from cache`)}
     </div>
 
@@ -202,7 +210,9 @@ async function loadAdmin() {
             <tr class="sep"><td>Tokens in</td><td class="num">${num(spend.tokens_in)}</td></tr>
             <tr><td>Tokens out</td><td class="num">${num(spend.tokens_out)}</td></tr>
             <tr class="tot"><td>Spend</td>
-                <td class="num">$${(spend.usd || 0).toFixed(4)} · ${money(spend.gbp)}</td></tr>
+                <td class="num">${spend.fully_priced
+                  ? `$${(spend.usd || 0).toFixed(4)} · ${money(spend.gbp)}`
+                  : "—"}</td></tr>
           </table>
           <div class="tiny" style="margin-top:10px;">
             ${spend.fully_priced
@@ -217,17 +227,21 @@ async function loadAdmin() {
         <div class="inner">
           <table class="calc">
             <tr><td>Measured cost per customer turn</td>
-                <td class="num">${money(unit.gbp_per_turn)}</td></tr>
+                <td class="num">${priced(unit.gbp_per_turn)}</td></tr>
             <tr><td>Turns in one contact <b>(estimated)</b></td>
                 <td class="num">${unit.turns_per_contact}</td></tr>
             <tr><td>Cost per contact</td>
-                <td class="num">${money(unit.gbp_per_contact)}</td></tr>
+                <td class="num">${priced(unit.gbp_per_contact)}</td></tr>
             <tr class="sep"><td>Contacts a year</td>
                 <td class="num">${num(unit.annual_contacts)}</td></tr>
             <tr class="tot"><td>AI cost a year</td>
-                <td class="num">£${num(Math.round(unit.gbp_per_year))}</td></tr>
+                <td class="num">${spend.fully_priced
+                  ? "£" + num(Math.round(unit.gbp_per_year)) : "—"}</td></tr>
           </table>
           <div class="tiny" style="margin-top:10px;">
+            ${spend.fully_priced ? "" : `<b>A model on this workload has no
+              published per-token rate, so none of these figures can be worked
+              out. Add its rate in <code>providers.py</code> to price them.</b><br>`}
             Only the prompts a conversation triggers are counted. Document
             processing, chase drafting and consistency checks are billed per
             claim, not per contact. Turns per contact is the one estimate on

@@ -317,6 +317,16 @@ MIGRATIONS: list[tuple[str, str, str]] = [
     # customer stayed frustrated the offer was re-made on every single turn,
     # which reads as the assistant trying to hand them off rather than help.
     ("conversation", "human_offered_ever_at", "TEXT"),
+    # Which claim the thread is on. This lived only in the browser tab, so a
+    # refresh reset it to nothing and the next turn silently fell back to the
+    # newest claim — the customer carried on talking about one claim while the
+    # cards answered about another.
+    ("conversation", "active_claim_id", "TEXT"),
+    # The cards that went with an assistant message. They were held in browser
+    # memory only, so a refresh replayed the thread as plain text — the
+    # checklist, the timeline and the attach button all vanished, and the reply
+    # was left pointing at "the list below this message" with nothing below it.
+    ("message", "cards", "TEXT"),
 ]
 
 
