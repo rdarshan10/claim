@@ -82,9 +82,17 @@ PROVIDERS: dict[str, Provider] = {
         # it must never leak onto Groq or anything production-facing.
         verify_ssl=False,
         note="TCS lab endpoint. Certificate is not validated.",
+        # The lab does not publish its own per-token rates. These two are Azure
+        # OpenAI deployments, so they are priced at Azure's published list rate
+        # for the model behind them — which is what the lab is passing through.
+        # Treat them as an upper bound on a subsidised internal endpoint rather
+        # than an invoice. Sonnet stays unpriced until someone confirms a rate:
+        # a wrong number here is worse than an honest "unknown".
         models=[
-            Model("azure/genailab-maas-gpt-4.1", "GPT-4.1", "Strong instruction follower"),
-            Model("azure/genailab-maas-gpt-4.1-mini", "GPT-4.1 mini", "Cheap and fast"),
+            Model("azure/genailab-maas-gpt-4.1", "GPT-4.1", "Strong instruction follower",
+                  usd_in_per_m=2.00, usd_out_per_m=8.00),
+            Model("azure/genailab-maas-gpt-4.1-mini", "GPT-4.1 mini", "Cheap and fast",
+                  usd_in_per_m=0.40, usd_out_per_m=1.60),
             Model("genailab-maas-sonnet-4.6", "Sonnet 4.6", "Different vendor — real failover"),
         ],
         default_primary="azure/genailab-maas-gpt-4.1",
