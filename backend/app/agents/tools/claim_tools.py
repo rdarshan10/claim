@@ -31,6 +31,69 @@ def _audited(name: str, customer_id: str, args: dict[str, Any], result_size: int
                  payload={"tool": name, "args": args, "results": result_size})
 
 
+# "the other claim" names a claim by contrast with the one already in view. It
+# is as specific as a reference number when the customer has exactly two, and
+# left unhandled it fell through to the claim the thread was already on — so the
+# reply talked about the other claim while the cards below showed the current
+# one, contradicting each other on screen.
+# The word between "the" and "claim"/"one" is captured rather than matched
+# literally, so a typed message still resolves. Customers type "the oter one"
+# and an exact match sent them the claim they were already looking at while the
+# reply talked about the other one.
+OTHER_REF = re.compile(
+    r"\b(?:the|my|that)\s+([a-z]{3,7})\s+(?:claim|one)\b", re.IGNORECASE)
+
+
+def _is_other(word: str) -> bool:
+    """Is this word "other", allowing for one typo?
+
+    One edit covers the common slips — a dropped letter ("oter"), a doubled one
+    ("otherr"), a swapped pair ("ohter"). Swaps count as one edit rather than
+    two, because transposing adjacent letters is the typo people actually make.
+    Two edits would start matching real words that mean something else, so the
+    bar stays at one: "first", "second" and "motor" are choices, not misspellings.
+    """
+    word = (word or "").lower()
+    target = "other"
+    if word == target:
+        return True
+    if abs(len(word) - len(target)) > 1:
+        return False
+
+    # Optimal string alignment: Levenshtein plus adjacent transposition.
+    rows = [[0] * (len(target) + 1) for _ in range(len(word) + 1)]
+    for i in range(len(word) + 1):
+        rows[i][0] = i
+    for j in range(len(target) + 1):
+        rows[0][j] = j
+    for i in range(1, len(word) + 1):
+        for j in range(1, len(target) + 1):
+            cost = word[i - 1] != target[j - 1]
+            rows[i][j] = min(rows[i - 1][j] + 1,        # deletion
+                             rows[i][j - 1] + 1,        # insertion
+                             rows[i - 1][j - 1] + cost)  # substitution
+            if (i > 1 and j > 1 and word[i - 1] == target[j - 2]
+                    and word[i - 2] == target[j - 1]):
+                rows[i][j] = min(rows[i][j], rows[i - 2][j - 2] + 1)  # swap
+    return rows[len(word)][len(target)] <= 1
+
+
+def resolve_other(message: str, claims: list[dict[str, Any]],
+                  active_claim_id: str | None) -> dict[str, Any] | None:
+    """The claim the customer means by "the other one", if that is unambiguous.
+
+    Only when exactly one claim is not the one in view. With three claims the
+    phrase genuinely does not say which, and picking one would reintroduce the
+    bug it solves.
+    """
+    if not active_claim_id:
+        return None
+    if not any(_is_other(m.group(1)) for m in OTHER_REF.finditer(message or "")):
+        return None
+    others = [c for c in claims if c["id"] != active_claim_id]
+    return others[0] if len(others) == 1 else None
+
+
 def resolve_reference(customer_id: str, message: str) -> tuple[dict[str, Any] | None, bool]:
     """Which claim a message names, if any.
 

@@ -327,20 +327,54 @@ _AFFIRMATIVES = {
 }
 
 
+# Questions an open intake must not swallow. claim_status was the original set;
+# documents and knowledge were added because the assistant's own suggested
+# questions live there — "How do I photograph my licence?", "Where do I find the
+# claim form?" — and a customer part-way through an intake who tapped one got
+# "Sorry, I didn't quite follow. Could you pick one of these?" with no way out
+# except abandoning the notification.
+_ESCAPES_INTAKE = ("claim_status", "documents", "knowledge")
+
+
 def _asks_about_existing(message: str) -> bool:
-    """Is this a question about claims already on the account?
+    """Is this a question the intake should step aside for?
 
     Deliberately narrow: it has to read as a question *and* carry a strong
-    claim-status signal. An intake answer is typically a bare value — a date, an
-    amount, a place — so it matches neither, and the intake keeps capturing as
-    designed.
+    signal for one of the intents above. An intake answer is typically a bare
+    value — a date, an amount, a place — so it matches neither, and the intake
+    keeps capturing as designed.
     """
     lowered = (message or "").strip().lower()
-    if "?" not in lowered and not re.match(r"^(how|what|when|which|where|do|does|is|are)\b",
-                                           lowered):
+
+    # A claim reference settles it on its own, whatever the sentence looks like.
+    # No answer to "when did it happen" contains "CLM-88429", and the switch
+    # button on a document card sends exactly this — "Show me what's outstanding
+    # on CLM-88429." — which an open intake was reading as a date.
+    from app.agents.tools import claim_tools
+
+    if claim_tools.CLAIM_REF.search(lowered):
+        return True
+
+    written_as_question = "?" in lowered
+    # "show me", "tell me" and "list" open a request without being questions.
+    if not written_as_question and not re.match(
+            r"^(how|what|when|which|where|do|does|is|are|show|tell|list|give)\b",
+            lowered):
         return False
+
+    # An answer to an intake question is a value — "yesterday", "£400",
+    # "Kingsway". Several words ending in a question mark is not one, whatever
+    # the router makes of the topic, so it steps aside rather than being fed to
+    # the card as an unparseable answer.
+    if written_as_question and len(lowered.split()) >= 3:
+        return True
+
+    # Without a question mark, the confidence floor does the work. Answer-shaped
+    # text that happens to open with a question word — "what happened was I hit
+    # a wall" — carries no strong signal and scores well below it, so it stays
+    # with the intake as an answer.
     intent, confidence = supervisor._heuristic_intent(lowered)
-    return intent == "claim_status" and confidence >= 0.7
+    return intent in _ESCAPES_INTAKE and confidence >= 0.7
 
 
 def _already_offered(state: GraphState) -> bool:

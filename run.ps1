@@ -100,7 +100,7 @@ if ($NoLlm) {
     Write-Host "  LLM         DISABLED - template mode" -ForegroundColor Yellow
 }
 Write-Host ""
-Write-Host "  Customer    priya@example.com      code 000000"
+Write-Host "  Customer    emma@example.com       code 000000"
 Write-Host "  Reviewer    agent.marcus           code 000000   (Staff tab)"
 Write-Host "  Manager     manager.elena          code 000000   (Staff tab)"
 Write-Host ""

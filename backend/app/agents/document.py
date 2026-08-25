@@ -3,34 +3,9 @@ from __future__ import annotations
 
 from app.agents.state import GraphState
 from app.agents.tools import claim_tools as tools
+# Single source of truth, shared with the knowledge agent.
+from app.documents.guidance import GUIDANCE
 
-GUIDANCE = {
-    "police_report": "Ask the police station that recorded the incident for a copy — "
-                     "it usually takes 2-3 days and there may be a small fee.",
-    "repair_invoice": "Your garage can email this to you. It needs the garage's name, "
-                      "an invoice number, the date and the total.",
-    "damage_photo": "Take photos in daylight showing the whole vehicle, then close-ups "
-                    "of each damaged area.",
-    "driving_licence": "Photograph both sides of your licence, flat and in good light.",
-    "claim_form": "You can download this from your policy documents, or I can email you "
-                  "a fresh copy.",
-    "medical_report": "Ask the treating clinic or hospital for a copy of the report.",
-    "discharge_summary": "The hospital gives this to you when you leave; the ward can "
-                         "reprint it if you've lost it.",
-    "pharmacy_bill": "Your pharmacy can reprint a receipt if you have the prescription date.",
-    "id_proof": "A passport or national ID card photographed flat, with all corners visible.",
-    # Home claims — created by FNOL registration, and previously had no guidance
-    # at all, so the checklist named them without saying how to get them.
-    "damage_photos": "Photograph each damaged area in daylight — one wide shot of the "
-                     "room, then close-ups. Include anything ruined that you're claiming for.",
-    "repair_quote": "A written quote from a tradesperson or contractor. It needs their "
-                    "name, the work described, and the total.",
-    "treatment_invoice": "The clinic or hospital can email this. It needs the provider's "
-                         "name, the treatment date and the amount.",
-    "bank_statement": "A statement showing the account you'd like to be paid into — the "
-                      "first page is enough.",
-    "bank_statement": "Download a PDF from your banking app — the last 3 months is enough.",
-}
 
 
 def run(state: GraphState) -> GraphState:
@@ -57,6 +32,10 @@ def run(state: GraphState) -> GraphState:
                      "claims listed above instead."),
         }
         return state
+    # "the other one" is resolved against the claim in view, so it is checked
+    # before that claim is reused.
+    if claim is None:
+        claim = tools.resolve_other(state.message, claims, state.active_claim_id)
     if claim is None and state.active_claim_id:
         claim = tools.get_claim_detail(state.customer_id, state.active_claim_id)
 

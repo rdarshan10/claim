@@ -11,15 +11,30 @@
 <link rel="stylesheet" href="/static/css/app.css">
 <style>
 /* ------------------------------------------------------------------ chat */
+/* The chat is a fixed-height pane, not a scrolling document. The container's
+   72px bottom padding gives the claims list room to breathe below the fold,
+   but under the composer it is just dead space — 72px of empty page between
+   the AI caveat and the bottom of the window. Trimmed to 18px here only. */
+.container:has(> #panel-chat.active) { padding-bottom: 18px; }
+
 /* Viewport minus the chrome above and below the chat: 60px header + 47px tab
-   bar + the container's 26px/72px padding = 205px. The old figure subtracted
-   135px, so the panel stood 70px taller than the space it had and the whole
-   page scrolled behind the sticky bars — the chat has its own scroller, so the
-   document should not move at all here. dvh so mobile browser chrome counts. */
+   bar + the container's 26px top and 18px bottom padding = 151px. The original
+   figure subtracted 135px, so the panel stood taller than the space it had and
+   the whole page scrolled behind the sticky bars — the chat has its own
+   scroller, so the document should not move at all here. dvh so mobile browser
+   chrome counts. */
 .chat-shell { display: flex; flex-direction: column;
-              height: calc(100vh - 205px); height: calc(100dvh - 205px);
+              height: calc(100vh - 151px); height: calc(100dvh - 151px);
               min-height: 460px; }
-.chat-scroll { flex: 1; overflow-y: auto; padding: 6px 2px 14px; scroll-behavior: smooth; }
+/* The conversation is a column, not a full-width sheet. Left-aligned in a
+   1080px container it trailed off with a dead third on the right, and the eye
+   travelled back across empty space for every line. Centring with the
+   scroller's own padding keeps every child's own max-width intact — setting it
+   on the children instead collides with `.msg { max-width: 96% }` at equal
+   specificity, and loses. */
+.chat-scroll { flex: 1; overflow-y: auto; scroll-behavior: smooth;
+               padding: 6px max(2px, calc((100% - 760px) / 2)) 14px; }
+@media (prefers-reduced-motion: reduce) { .chat-scroll { scroll-behavior: auto; } }
 
 .msg { display: flex; gap: 11px; margin-bottom: 18px; max-width: 96%; }
 .msg .av { flex-shrink: 0; width: 30px; height: 30px; border-radius: 9px; display: grid;
@@ -34,7 +49,10 @@
                    box-shadow: var(--shadow-sm); }
 .msg.me .bubble { background: var(--indigo-600); color: #fff; border-top-right-radius: 4px; }
 .msg .relay { font-size: .74rem; color: var(--ink-4); margin-bottom: 5px; display: block; }
-.msg-cards { margin-left: 41px; margin-bottom: 18px; max-width: 660px; }
+/* Cards sit under the bubble they belong to, so they start where that bubble
+   starts — 41px clears the avatar. They were also 20px wider than the bubble,
+   which read as a misalignment rather than a deliberate step. */
+.msg-cards { margin-left: 41px; margin-bottom: 18px; max-width: 640px; }
 .msg-cards .card { margin-bottom: 10px; }
 
 .sys-note { text-align: center; font-size: .78rem; color: var(--ink-4); margin: 12px 0; font-style: italic; }
@@ -117,7 +135,11 @@
         <div id="attach-preview"></div>
         <div class="row">
           <button class="btn-attach" id="attach" title="Attach a document">📎</button>
-          <textarea id="input" class="grow" rows="1" placeholder="Ask me anything, or attach a document with 📎"></textarea>
+          <!-- Short enough to fit one line on a phone, where the attach and Send
+               buttons leave the field about 200px wide. The old placeholder named
+               the paperclip, wrapped to two lines inside a box one line tall, and
+               was cut in half — with the 📎 button sitting right beside it. -->
+          <textarea id="input" class="grow" rows="1" placeholder="Ask me anything…"></textarea>
           <button class="btn btn-primary" id="send">Send</button>
         </div>
         <input type="file" id="chat-file" class="hidden" multiple
@@ -127,6 +149,12 @@
         <div class="drop-overlay-inner">📎 Drop to attach to your claim</div>
       </div>
       <div class="tiny" id="poll-note" style="margin-top:8px;text-align:center;"></div>
+      <!-- Always on screen, under the composer, where it is read before sending
+           rather than after. The status line above it comes and goes; this does
+           not, because the caveat is true on every turn. -->
+      <div class="tiny" id="ai-caveat" style="margin-top:6px;text-align:center;opacity:.75;">
+        ClaimCompanion uses AI and can make mistakes — please check anything important.
+      </div>
     </div>
   </section>
 
@@ -186,6 +214,21 @@ const state = { cid: null, greeting: "", cards: {}, uploads: [], lastMessageId: 
                 threadSignature: null, awayMarker: null, activeClaimId: null,
                 polling: null, busy: false };
 const thread = document.getElementById("thread");
+
+/** Pin the thread to its newest message.
+ *
+ *  Setting scrollTop once is not enough: cards render after the bubble they
+ *  belong to, disclosure rows and annotated images add height a frame later,
+ *  and the web font reflows the text. Each of those grows scrollHeight after
+ *  the assignment, which left the newest reply below the fold — and because
+ *  the "should I stick to the bottom" test then read as "the user has scrolled
+ *  up", the thread never caught up again for the rest of the conversation.
+ */
+function scrollToLatest() {
+  const pin = () => { thread.scrollTop = thread.scrollHeight; };
+  pin();
+  requestAnimationFrame(() => { pin(); requestAnimationFrame(pin); });
+}
 
 async function startConversation(fresh = false) {
   const result = await api("POST", "/chat/conversations", fresh ? { params: { fresh: "true" } } : {});
@@ -263,7 +306,7 @@ function renderThread(payload) {
     chips.append(el("button", { class: "chip-sugg", onclick: () => send(suggestion) }, suggestion));
   });
 
-  if (stick) thread.scrollTop = thread.scrollHeight;
+  if (stick) scrollToLatest();
 }
 
 /** Intake advances in place: answering one card appends the next to the same
@@ -395,7 +438,7 @@ async function send(text) {
     el("div", { class: "av", html: SHIELD }),
     el("div", { class: "bubble", html: '<div class="typing"><span></span><span></span><span></span></div>' }));
   thread.append(pending);
-  thread.scrollTop = thread.scrollHeight;
+  scrollToLatest();
 
   try {
     const result = await api("POST", `/chat/conversations/${state.cid}/messages`, {
@@ -504,7 +547,7 @@ function askWhichClaim(claims, files) {
   });
   host.append(card);
   thread.append(host);
-  thread.scrollTop = thread.scrollHeight;
+  scrollToLatest();
 }
 
 const UPLOAD_STAGES = {
@@ -526,7 +569,7 @@ async function uploadToChat(file, claim) {
     el("div", { class: "bubble" },
       el("span", { class: "spinner" }), " Uploading…"));
   thread.append(status);
-  thread.scrollTop = thread.scrollHeight;
+  scrollToLatest();
 
   const bubble = status.querySelector(".bubble");
   try {
@@ -657,7 +700,7 @@ function showVerdict(document_, docId, claim) {
   // or the card asks again for what was just sent.
   syncActionCards(claim.id).then(async () => {
     await refresh({ force: true });
-    thread.scrollTop = thread.scrollHeight;
+    scrollToLatest();
   });
 }
 

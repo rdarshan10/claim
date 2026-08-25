@@ -159,7 +159,7 @@ def _overview(state: GraphState, claims: list[dict]) -> GraphState:
     """
     pending = _notifications(state.customer_id)
     state.facts = {
-        "claims": [_summary(c) for c in claims],
+        "claims": [_summary(c, state.customer_id) for c in claims],
         "open_claim_count": len(claims),
         "notifications_of_loss_not_yet_claims": _summarise(pending),
         "notifications_of_loss_count": len(pending),
@@ -209,6 +209,10 @@ def run(state: GraphState) -> GraphState:
                      "the claims listed above instead."),
         }
         return state
+    if claim is None:
+        # "the other one" is resolved against the claim in view, so it has to
+        # come before that claim is reused.
+        claim = tools.resolve_other(state.message, claims, state.active_claim_id)
     if claim is None:
         # "the motor one" is as specific as a reference number when only one
         # claim has that type. This has to be checked BEFORE the claim carried
@@ -275,12 +279,28 @@ def run(state: GraphState) -> GraphState:
         "all_claims_on_this_account": [
             {"claim_number": c["claim_number"],
              "type": c["claim_type"],
-             "stage": timeline_prediction.stage_meaning(c["status"]),
+             "stage": timeline_prediction.stage_meaning(
+                 c["status"],
+                 awaiting_customer=_awaiting_customer(state.customer_id, c)),
              "incident_date": c.get("incident_date"),
              "is_the_one_discussed_above": c["id"] == claim["id"]}
             for c in claims
         ],
         "claims_on_this_account_count": len(claims),
+        # The list above is context for naming the others, not a promise that
+        # they are all on screen. Only the claim discussed has cards below, and
+        # a reply saying "you can see what's outstanding for each" left the
+        # customer hunting for cards that were never rendered.
+        "cards_below_cover": (
+            f"This answer is about {claim['claim_number']} — describe that one. "
+            f"The account's other claims are listed above as context so they can "
+            f"be named if the customer asks which exist; they are not the subject "
+            f"of this reply and have no cards below it, so do not say the customer "
+            f"can see their details here. Each carries its own stage: never "
+            f"describe two claims as being at the same point unless their stages "
+            f"match, and never say a claim is waiting for documents when its "
+            f"stage says otherwise."
+        ) if len(claims) > 1 else None,
         # Reported but not yet registered as claims. Counted separately so
         # "how many have I raised?" can be answered honestly: these are real
         # things the customer has told us about, but they have no claim number
@@ -344,12 +364,32 @@ STATUS_LABEL = {
 }
 
 
-def _summary(claim: dict) -> dict:
+def _awaiting_customer(customer_id: str, claim: dict) -> bool:
+    """Does this claim still need something from the customer?
+
+    DOCS_PENDING covers two different situations — "we are waiting for you" and
+    "you have sent everything and we are checking it". Without this they read
+    identically, so a customer who had sent every document was still told their
+    claim was waiting for documents.
+    """
+    if claim.get("status") != "DOCS_PENDING":
+        return False
+    try:
+        return bool(tools.get_required_documents(
+            customer_id, claim["id"])["awaiting_customer"])
+    except Exception:  # noqa: BLE001 — a summary must never fail the turn
+        return True
+
+
+def _summary(claim: dict, customer_id: str | None = None) -> dict:
+    awaiting = _awaiting_customer(customer_id, claim) if customer_id else True
     return {
         "claim_number": claim["claim_number"],
         "claim_type": claim["claim_type"],
         "subtype": claim.get("subtype"),
         "status": STATUS_LABEL.get(claim["status"], claim["status"].lower()),
+        "stage": timeline_prediction.stage_meaning(
+            claim["status"], awaiting_customer=awaiting),
         "claimed_amount": claim.get("claimed_amount"),
         "approved_amount": claim.get("approved_amount"),
         "incident_date": claim.get("incident_date"),

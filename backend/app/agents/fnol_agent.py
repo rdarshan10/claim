@@ -10,6 +10,7 @@ the 3rd" should not be made to use a date picker.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.agents.state import GraphState
@@ -28,9 +29,20 @@ START_PHRASES = (
 )
 
 
+# Whole words only. Substring matching read "claim for" inside "claim form", so
+# "Where do I find the claim form?" — one of the assistant's own suggested
+# questions — opened a notification of loss instead of answering it.
+_START_PATTERNS = tuple(
+    re.compile(rf"\b{re.escape(phrase)}\b") if phrase.isascii()
+    # Non-ASCII phrases have no word boundary to anchor to; they stay literal.
+    else re.compile(re.escape(phrase))
+    for phrase in START_PHRASES
+)
+
+
 def wants_to_start(message: str) -> bool:
     lowered = (message or "").lower()
-    return any(phrase in lowered for phrase in START_PHRASES)
+    return any(pattern.search(lowered) for pattern in _START_PATTERNS)
 
 
 def run(state: GraphState) -> GraphState:
