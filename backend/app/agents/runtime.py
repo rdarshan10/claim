@@ -71,7 +71,6 @@ def thread_history(thread_id: str, graph: Any, limit: int = 50) -> list[dict[str
             "created_at": snapshot.created_at,
             "step": (snapshot.metadata or {}).get("step"),
             "source": (snapshot.metadata or {}).get("source"),
-            "wrote": list(((snapshot.metadata or {}).get("writes") or {}).keys()),
             "next": list(snapshot.next),
             "values": {k: values.get(k) for k in (
                 "trace_id", "message", "intent", "intent_confidence", "sentiment",

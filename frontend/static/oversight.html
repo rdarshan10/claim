@@ -98,6 +98,15 @@ table.calc tr.sep td { border-top: 1px solid var(--line); padding-top: 9px; }
 table.calc tr.tot td { border-top: 2px solid var(--line-2); padding-top: 9px;
                        font-weight: 680; color: var(--ink); }
 
+/* aiops */
+.incident { border-bottom: 1px solid var(--line); padding: 12px 13px; }
+.incident:last-child { border-bottom: 0; }
+.incident h3 { font-size: .95rem; margin: 0 0 4px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.incident .why { font-size: .84rem; color: var(--ink-2); line-height: 1.5; margin: 6px 0; }
+.incident .meta { font-size: .74rem; color: var(--ink-4); font-family: var(--mono); }
+.step { display: flex; gap: 8px; align-items: center; font-size: .82rem; padding: 4px 0; }
+.step input { margin: 0; }
+.sig-ok { color: var(--ink-3); } .sig-hot { color: var(--red); font-weight: 640; }
 </style>
 </head>
 <body>
@@ -108,6 +117,7 @@ table.calc tr.tot td { border-top: 2px solid var(--line-2); padding-top: 9px;
   <button class="tab active" data-panel="admin">AI cost</button>
   <button class="tab" data-panel="metrics">AI quality</button>
   <button class="tab" data-panel="audit">Audit trail</button>
+  <button class="tab" data-panel="aiops">AIOps</button>
   <a class="tab tab-link" href="/staff">← Back to the console</a>
 </nav>
 
@@ -115,6 +125,7 @@ table.calc tr.tot td { border-top: 2px solid var(--line-2); padding-top: 9px;
   <section class="panel active" id="panel-admin"><div id="admin-body"></div></section>
   <section class="panel" id="panel-metrics"><div id="metrics-body"></div></section>
   <section class="panel" id="panel-audit"><div id="audit-body"></div></section>
+  <section class="panel" id="panel-aiops"><div id="aiops-body"></div></section>
 </div>
 
 <script type="module">
@@ -383,7 +394,114 @@ async function fetchAudit(entityId) {
 }
 
 
-const VIEWS = { admin: loadAdmin, metrics: loadMetrics, audit: loadAudit };
+// ------------------------------------------------------------------ AIOps
+const SEV = { critical: "b-red", high: "b-red", medium: "b-amber", low: "b-slate" };
+const IST = { OPEN: "b-amber", AWAITING_APPROVAL: "b-blue", MITIGATED: "b-green",
+              RESOLVED: "b-green", DISMISSED: "b-slate" };
+const badge = (cls, text) => `<span class="badge ${cls}"><span class="dot"></span>${esc(text)}</span>`;
+
+async function loadAiops() {
+  const host = document.getElementById("aiops-body");
+  if (!isManager) {
+    host.innerHTML = alertBox("info", "AIOps is available to managers.");
+    return;
+  }
+  host.innerHTML = '<div class="skel" style="width:46%"></div>';
+  const [{ incidents }, sig, cat] = await Promise.all([
+    api("GET", "/admin/aiops/incidents"), api("GET", "/admin/aiops/signals"),
+    api("GET", "/admin/aiops/catalogue")]);
+
+  const hot = new Set(incidents.filter(i => ["OPEN", "AWAITING_APPROVAL"].includes(i.status))
+                               .flatMap(i => i.anomalies.map(a => a.signal)));
+  const fmt = s => s.unit === "ratio" ? pct(s.value) : s.unit === "usd" ? "$" + s.value.toFixed(4)
+    : s.unit === "ms" ? Math.round(s.value) + " ms" : s.value;
+  const waiting = incidents.filter(i => i.status === "AWAITING_APPROVAL").length;
+
+  host.innerHTML = `
+    <div class="row-between" style="margin-bottom:14px;">
+      <div>
+        <h2>AIOps — the agent watching the operation</h2>
+        <div class="tiny">Sweeps every ${cat.settings.interval_seconds}s over the last
+          ${sig.window_minutes} min. Detection is rule-based; the model explains the cause
+          and picks high-risk fixes. Low-risk fixes run ${cat.settings.auto_remediate ? "automatically" : "only when approved"};
+          high-risk fixes always wait for you.</div>
+      </div>
+      <button class="btn btn-primary" id="aiops-sweep">Run a sweep now</button>
+    </div>
+    ${waiting ? alertBox("warn", `<b>${waiting}</b> incident(s) waiting for your decision.`) : ""}
+    <div class="admin-grid" style="grid-template-columns: minmax(0,2fr) minmax(280px,1fr);">
+      <div class="panel-box"><header>Incidents</header>
+        <div id="aiops-incidents">${incidents.length ? incidents.map(renderIncident).join("")
+          : '<div class="inner tiny">No incidents yet. The agent opens one when a signal crosses a threshold or its own baseline.</div>'}</div>
+      </div>
+      <div class="panel-box"><header>Live signals</header>
+        <div class="inner"><table class="data"><tbody>
+          ${sig.signals.map(s => `<tr title="${esc(s.description)}">
+             <td class="${hot.has(s.name) ? "sig-hot" : "sig-ok"}">${esc(humanise(s.name))}</td>
+             <td class="num">${esc(fmt(s))}</td><td class="num tiny">n=${s.sample_size}</td></tr>`).join("")}
+        </tbody></table></div>
+      </div>
+    </div>`;
+
+  document.getElementById("aiops-sweep").addEventListener("click", e => withBusy(e.currentTarget, async () => {
+    const r = await api("POST", "/admin/aiops/sweep");
+    toast(r.status === "quiet" ? "Sweep complete — nothing new."
+        : r.status === "busy" ? "A sweep is already running."
+        : `Sweep complete — incident ${String(r.status).toLowerCase().replace(/_/g, " ")}.`);
+    loadAiops();
+  }));
+  host.querySelectorAll("[data-decide]").forEach(btn => btn.addEventListener("click", () =>
+    withBusy(btn, async () => {
+      const id = btn.dataset.decide;
+      const approve = [...host.querySelectorAll(`input[data-inc="${id}"]:checked`)].map(i => i.value);
+      const r = await api("POST", `/admin/aiops/incidents/${id}/decision`, { json: { approve } });
+      toast(`Decision recorded — incident ${String(r.status).toLowerCase()}.`, "ok");
+      loadAiops();
+    })));
+  host.querySelectorAll("[data-close]").forEach(btn => btn.addEventListener("click", () =>
+    withBusy(btn, async () => {
+      await api("POST", `/admin/aiops/incidents/${btn.dataset.close}/status`,
+                { json: { status: btn.dataset.to } });
+      loadAiops();
+    })));
+}
+
+function renderIncident(i) {
+  const waiting = i.status === "AWAITING_APPROVAL";
+  const step = p => {
+    if (waiting && p.status === "awaiting_approval") {
+      return `<label class="step"><input type="checkbox" data-inc="${i.id}" value="${esc(p.playbook)}"
+                ${p.recommended ? "checked" : ""}> ${badge(p.risk === "high" ? "b-red" : "b-slate", p.risk)}
+                ${esc(p.title)} ${p.recommended ? '<span class="tiny">· recommended</span>' : ""}</label>`;
+    }
+    const cls = p.status === "executed" ? "b-green" : p.status === "rejected" ? "b-slate"
+      : p.status === "error" ? "b-red" : "b-amber";
+    return `<div class="step">${badge(cls, humanise(p.status))} ${esc(p.title)}
+              <span class="tiny">(${esc(p.risk)} risk)</span></div>`;
+  };
+  const v = i.verification || {};
+  return `<div class="incident">
+    <h3>${badge(SEV[i.severity] || "b-slate", i.severity)} ${badge(IST[i.status] || "b-slate", humanise(i.status))}
+        ${esc(i.title)}</h3>
+    <div class="meta">${esc((i.created_at || "").replace("T", " ").slice(0, 19))} ·
+      ${esc((i.detectors || []).join(", "))} · diagnosis: ${esc(i.diagnosis_source || "—")}
+      ${i.confidence != null ? `(${pct(i.confidence)})` : ""}${i.decided_by ? ` · decided by ${esc(i.decided_by)}` : ""}</div>
+    ${i.summary ? `<div class="why">${esc(i.summary)}</div>` : ""}
+    ${i.root_cause ? `<div class="why"><b>Likely cause:</b> ${esc(i.root_cause)}</div>` : ""}
+    <div>${(i.plan || []).map(step).join("") || '<div class="tiny">No playbook applies — a person needs to look.</div>'}</div>
+    ${v.at ? `<div class="tiny" style="margin-top:6px;">Verified: cleared
+       ${esc((v.cleared || []).map(c => c.detector).join(", ") || "none")} · still firing
+       ${esc((v.still_firing || []).map(c => c.detector).join(", ") || "none")}</div>` : ""}
+    <div class="btn-row" style="margin-top:8px;">
+      ${waiting ? `<button class="btn btn-sm btn-primary" data-decide="${i.id}">Apply ticked actions</button>` : ""}
+      ${["OPEN", "MITIGATED", "AWAITING_APPROVAL"].includes(i.status) ? `
+        <button class="btn btn-sm" data-close="${i.id}" data-to="RESOLVED">Mark resolved</button>
+        <button class="btn btn-sm btn-ghost" data-close="${i.id}" data-to="DISMISSED">Dismiss</button>` : ""}
+    </div>
+  </div>`;
+}
+
+const VIEWS = { admin: loadAdmin, metrics: loadMetrics, audit: loadAudit, aiops: loadAiops };
 loaded.admin = true;
 loadAdmin();
 </script>

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -10,9 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1 import auth, chat, claims, demo, documents, fnol, fnol_agentic, staff
+from app.api.v1 import aiops, auth, chat, claims, demo, documents, fnol, fnol_agentic, staff
 from app.config import get_settings
 from app.db import init_db, query
+from app.ops import telemetry
 
 SHIELD_FAVICON = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#3b5bdb">'
@@ -32,10 +34,24 @@ def create_app() -> FastAPI:
     settings = get_settings()
     init_db()
 
+    telemetry.init_tracing(settings.app_name)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        # The AIOps agent sweeps on its own timer (AIOPS_ENABLED=false to stop it).
+        from app.aiops import graph as aiops_graph
+
+        aiops_graph.start_scheduler()
+        try:
+            yield
+        finally:
+            aiops_graph.stop_scheduler()
+
     app = FastAPI(
         title=settings.app_name,
         description="Insurance claim query chatbot with document verification.",
-        version="0.1.0-mvp",
+        version="0.2.0",
+        lifespan=lifespan,
     )
 
     app.add_middleware(
@@ -48,7 +64,8 @@ def create_app() -> FastAPI:
     )
 
     for router in (auth.router, claims.router, documents.router, chat.router,
-                   fnol.router, fnol_agentic.router, staff.router, demo.router):
+                   fnol.router, fnol_agentic.router, staff.router, demo.router,
+                   aiops.router):
         app.include_router(router, prefix=settings.api_prefix)
 
     @app.exception_handler(Exception)
@@ -65,6 +82,12 @@ def create_app() -> FastAPI:
             },
             media_type="application/problem+json",
         )
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics() -> Response:
+        """Prometheus scrape endpoint."""
+        body, content_type = telemetry.render_metrics()
+        return Response(content=body, media_type=content_type)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:

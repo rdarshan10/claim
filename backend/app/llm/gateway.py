@@ -23,6 +23,7 @@ from app.config import get_settings
 from app.db import execute
 from app.guardrails.pii import redact
 from app.llm import providers
+from app.ops import telemetry
 
 PROMPT_DIR = Path(__file__).parent / "prompts"
 
@@ -257,6 +258,16 @@ def _meter(prompt_key: str, version: str, model: str, latency_ms: int, ok: bool,
         (str(uuid.uuid4()), prompt_key, version, model, tokens_in, tokens_out,
          latency_ms, 1 if ok else 0, trace_id, 1 if cached else 0),
     )
+    outcome = "cached" if cached else ("ok" if ok else "error")
+    telemetry.LLM_CALLS.labels(prompt_key, model, outcome).inc()
+    if not cached:
+        telemetry.LLM_LATENCY.labels(prompt_key, model).observe(latency_ms / 1000)
+        if ok:
+            telemetry.LLM_TOKENS.labels(prompt_key, model, "in").inc(tokens_in)
+            telemetry.LLM_TOKENS.labels(prompt_key, model, "out").inc(tokens_out)
+            rate_in, rate_out = providers.price_for(model)
+            telemetry.LLM_COST.labels(model).inc(
+                (tokens_in * rate_in + tokens_out * rate_out) / 1_000_000)
 
 
 def complete(
@@ -342,6 +353,13 @@ def complete(
             return LLMResult(text, model, prompt_key, version, latency_ms)
         except Exception as exc:  # noqa: BLE001 - any transport error degrades the tier
             last_error = exc
+            if not settings.llm_enabled:
+                # Template mode is a choice, not a provider failure: metering it
+                # as one would read as an outage to anything watching error
+                # rates (the AIOps agent included). Nothing to retry either.
+                telemetry.LLM_CALLS.labels(prompt_key, f"{provider_key}/{model}",
+                                           "disabled").inc()
+                break
             latency_ms = int((time.perf_counter() - started) * 1000)
             _meter(prompt_key, version, f"{provider_key}/{model}", latency_ms, False, trace_id)
 
@@ -355,6 +373,7 @@ def complete(
     )
 
     if fallback is not None:
+        telemetry.LLM_CALLS.labels(prompt_key, "template-fallback", "fallback").inc()
         return LLMResult(fallback, "template-fallback", prompt_key, version, 0, degraded=True)
     raise LLMUnavailable(str(last_error))
 
