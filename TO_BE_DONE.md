@@ -32,7 +32,7 @@ Each of these is behind an interface, so undoing it is a swap, not a rewrite.
 | § | Design calls for | MVP uses | How to swap |
 |---|---|---|---|
 | 5 | PostgreSQL 16 + pgvector | SQLite (`backend/app/db.py`) | Docker isn't available on this machine. Schema is portable; replace `db.py` with asyncpg/SQLAlchemy and port `SCHEMA` (already written with FK constraints and CHECKs). All access is via `repositories/`. |
-| 5 | LangGraph orchestrator | ✅ **Done.** `agents/graph.py` is a LangGraph `StateGraph` with a SQLite checkpointer; the AIOps agent uses `interrupt()` for approvals. | Swap the SQLite saver in `agents/runtime.py` for `langgraph-checkpoint-postgres` once Postgres lands. Still to port: the document pipeline, the registration run and the reviewer relay. |
+| 5 | LangGraph orchestrator | ✅ **Done.** `agents/graph.py` is a LangGraph `StateGraph` with a SQLite checkpointer; the AIOps agent uses `interrupt()` for approvals. | Swap the SQLite saver in `agents/runtime.py` for `langgraph-checkpoint-postgres` once Postgres lands. The document pipeline, registration runs and reviewer relay are graphs too. |
 | 5 | Celery + Redis workers | `threading.Thread` per upload | `pipeline.process(doc_id)` is already a pure task body. Add `@celery.task` and change the call site in `api/v1/documents.py` to `.delay()`. |
 | 5 | MinIO / S3 | Local disk (`data/blobs/`) | Replace the two `Path.read_bytes`/`write_bytes` call sites with an S3 client; add signed URL generation for `/documents/{id}/annotated`. |
 | 10 | Tesseract 5 OCR | `TextOCRAdapter` over text-rendered documents | `ocr.py` defines the `OCRAdapter` protocol and `set_adapter()`. Write `TesseractAdapter.read()` returning the same `Word(text, bbox, confidence)` list — everything downstream (annotation geometry, quality map, thresholds) already consumes that shape. |
@@ -114,11 +114,10 @@ Each of these is behind an interface, so undoing it is a swap, not a rewrite.
   bugs, not pipeline bugs** — `datagen/generate.py` should derive document dates
   from the incident date and assert that each corruption maps to a rule that can
   actually catch it. Fix before quoting an accuracy number anywhere.
-- ⬜ No CI pipeline. `evals/run_evals.py` returns a non-zero exit on gate
-  failure and is ready to wire into GitHub Actions, but no workflow file exists.
-- ⬜ No pytest suite. The evals cover guardrails, grounding and the document
-  pipeline; unit tests for `rules.py`, `crypto.py`, `jwt.py` and the repository
-  scoping are still missing. Design target is ≥ 80% coverage (§25).
+- ✅ CI: `.github/workflows/ci.yml` runs pytest and the eval gates.
+- 🟡 pytest suite covers the graphs, AIOps and parity (`tests/`). Unit tests for
+  `rules.py`, `crypto.py`, `jwt.py` and repository scoping are still missing.
+  Design target is ≥ 80% coverage (§25).
 - 🟡 OpenTelemetry spans and Prometheus `/metrics` are in (`ops/telemetry.py`); no Grafana dashboards yet (§18).
   `trace_id` is threaded through the graph and audit log already, so wiring OTel
   is mostly decoration. `/admin/metrics/quality` and `/admin/metrics/costs`

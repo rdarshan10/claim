@@ -3,8 +3,9 @@
 UPLOADED -> SCANNING -> OCR -> CLASSIFYING -> EXTRACTING -> VALIDATING ->
 {VERIFIED | REJECTED_* | NEEDS_REVIEW}
 
-Runs in a background thread for the MVP; the ``process`` function is written to
-be a drop-in Celery task body (pure, takes an id, writes its own state).
+The stages are nodes of a LangGraph graph (see "orchestration" below). It runs
+in a background thread for the MVP; ``process`` is a drop-in Celery task body
+(takes an id, writes its own state).
 """
 from __future__ import annotations
 
@@ -13,8 +14,9 @@ import json
 import re
 import uuid
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from app.audit import logger as audit
 from app.config import get_settings
@@ -24,6 +26,9 @@ from app.documents import rules as R
 from app.documents.ocr import OCRResult, get_adapter
 from app.guardrails.input_guards import wrap_untrusted
 from app.llm import gateway
+from app.ops import telemetry
+
+GRAPH = "documents"
 
 VALID_DOC_TYPES = [
     "police_report", "repair_invoice", "damage_photo", "driving_licence",
@@ -270,13 +275,46 @@ def raise_fraud_signal(claim_id: str, doc_id: str, signal_type: str,
 
 
 # --------------------------------------------------------------------------
-# orchestration
+# orchestration — a LangGraph graph
 # --------------------------------------------------------------------------
-def process(doc_id: str) -> dict[str, Any]:
-    """Full pipeline for one document. Safe to call from a worker thread."""
-    settings = get_settings()
-    trace_id = str(uuid.uuid4())
+#
+#   load ─► scan ─► ocr ─► classify ─► extract ─► validate ─► gate ─► verdict
+#             │       │        │                                │        │
+#             └───────┴────────┴────────────► finish ◄──────────┴────────┘
+#
+# Every stage may reach a verdict early (unreadable, illegible, unsure, wrong
+# type, fraud signal, low confidence); ``finish`` is the single place a verdict
+# is written, audited and the claim advanced. Not checkpointed: the OCR result
+# carries word geometry, and a run is short and idempotent — re-running a
+# document is the recovery path (the AIOps ``requeue_stuck_documents`` playbook).
+class DocState(TypedDict, total=False):
+    doc_id: str
+    trace_id: str
+    document: dict[str, Any]
+    claim_id: str
+    raw: bytes
+    sha256: str
+    ocr: Any
+    expected: list[str]
+    classification: dict[str, Any]
+    doc_type: str
+    fields: dict[str, Any]
+    extraction_conf: float
+    duplicate: dict[str, Any] | None
+    results: list[Any]
+    failures: list[Any]
+    overall: float | None
+    verdict: dict[str, Any] | None
+    result: dict[str, Any]
 
+
+def _verdict(status: str, payload: dict[str, Any] | None,
+             overall: float | None = None) -> dict[str, Any]:
+    return {"verdict": {"status": status, "payload": payload, "overall": overall}}
+
+
+def _load(state: DocState) -> dict[str, Any]:
+    doc_id = state["doc_id"]
     row = query_one(
         """SELECT d.*, c.claim_number, c.incident_date, c.claim_type, c.claimed_amount,
                   c.id AS cid, p.coverage_limit, cu.full_name AS policyholder_name
@@ -288,40 +326,44 @@ def process(doc_id: str) -> dict[str, Any]:
         (doc_id,),
     )
     if row is None:
-        return {"status": "ERROR", "error": "document not found"}
-
+        return {"document": {}, "result": {"status": "ERROR", "error": "document not found"}}
     document = dict(row)
-    claim_id = document["claim_id"]
-    path = Path(document["storage_key"])
-
     audit.record("document_pipeline_started", entity_type="document", entity_id=doc_id,
-                 payload={"claim_id": claim_id}, trace_id=trace_id)
+                 payload={"claim_id": document["claim_id"]}, trace_id=state["trace_id"])
+    return {"document": document, "claim_id": document["claim_id"]}
 
-    # --- 1. scan --------------------------------------------------------
+
+def _scan_node(state: DocState) -> dict[str, Any]:
+    doc_id = state["doc_id"]
     _set_status(doc_id, "SCANNING")
+    path = Path(state["document"]["storage_key"])
     raw = path.read_bytes() if path.exists() else b""
     ok, message = scan(path, raw)
-    if not ok:
-        return _finish(doc_id, "REJECTED_CORRUPT", trace_id, claim_id, {
-            "doc_id": doc_id, "reason_code": "CORRUPT_FILE",
-            "headline": "I couldn't open that file",
-            "plain_explanation": message,
-            "technical_detail": [message],
-            "annotations": [], "can_dispute": True,
-            "fix_steps": ["Try re-saving the file, or take a fresh photo.",
-                          "Make sure the upload finished before closing the app.",
-                          "Upload it again here."],
-            "failed_rules": ["SCAN"],
-        })
+    if ok:
+        return {"raw": raw}
+    return {"raw": raw, **_verdict("REJECTED_CORRUPT", {
+        "doc_id": doc_id, "reason_code": "CORRUPT_FILE",
+        "headline": "I couldn't open that file",
+        "plain_explanation": message,
+        "technical_detail": [message],
+        "annotations": [], "can_dispute": True,
+        "fix_steps": ["Try re-saving the file, or take a fresh photo.",
+                      "Make sure the upload finished before closing the app.",
+                      "Upload it again here."],
+        "failed_rules": ["SCAN"],
+    })}
 
-    # --- 2. OCR ---------------------------------------------------------
+
+def _ocr_node(state: DocState) -> dict[str, Any]:
+    doc_id, document = state["doc_id"], state["document"]
     _set_status(doc_id, "OCR")
-    ocr = get_adapter().read(path)
-    sha256 = hashlib.sha256(raw).hexdigest()
+    ocr = get_adapter().read(Path(document["storage_key"]))
+    sha256 = hashlib.sha256(state["raw"]).hexdigest()
     execute("UPDATE document SET sha256 = ?, ocr_quality = ? WHERE id = ?",
             (sha256, ocr.quality, doc_id))
+    update: dict[str, Any] = {"ocr": ocr, "sha256": sha256, "raw": b""}
 
-    if ocr.error or ocr.quality < settings.ocr_quality_floor:
+    if ocr.error or ocr.quality < get_settings().ocr_quality_floor:
         detail = ocr.error or (
             f"Only about {int(ocr.quality * 100)}% of the text came out clearly."
         )
@@ -329,21 +371,27 @@ def process(doc_id: str) -> dict[str, Any]:
             {**document, "doc_type": document.get("doc_type")},
             [R.RuleResult("OCR-01", False, R.REASON_ILLEGIBLE, detail,
                           {"quality": ocr.quality})],
-            ocr, document, trace_id=trace_id,
+            ocr, document, trace_id=state["trace_id"],
         )
-        return _finish(doc_id, "REJECTED_QUALITY", trace_id, claim_id, payload)
+        update.update(_verdict("REJECTED_QUALITY", payload))
+    return update
 
-    # --- 3. classify ----------------------------------------------------
+
+def _classify_node(state: DocState) -> dict[str, Any]:
+    doc_id, document, ocr = state["doc_id"], state["document"], state["ocr"]
+    settings = get_settings()
     _set_status(doc_id, "CLASSIFYING")
     expected = [r["doc_type"] for r in query(
-        "SELECT doc_type FROM required_document WHERE claim_id = ?", (claim_id,))]
-    classification = classify(ocr, expected, trace_id)
+        "SELECT doc_type FROM required_document WHERE claim_id = ?", (state["claim_id"],))]
+    classification = classify(ocr, expected, state["trace_id"])
     doc_type = classification["doc_type"]
     execute("UPDATE document SET doc_type = ?, classification_conf = ? WHERE id = ?",
             (doc_type, classification["confidence"], doc_id))
+    update: dict[str, Any] = {"expected": expected, "classification": classification,
+                              "doc_type": doc_type}
 
     if classification["confidence"] < settings.classification_floor:
-        return _finish(doc_id, "NEEDS_REVIEW", trace_id, claim_id, {
+        update.update(_verdict("NEEDS_REVIEW", {
             "doc_id": doc_id, "reason_code": "LOW_CONFIDENCE",
             "headline": "A specialist is checking this document",
             "plain_explanation": "I wasn't confident enough about this document to decide "
@@ -353,40 +401,46 @@ def process(doc_id: str) -> dict[str, Any]:
                                  f"{classification['confidence']:.2f} below "
                                  f"{settings.classification_floor}."],
             "annotations": [], "fix_steps": [], "can_dispute": False, "failed_rules": [],
-        })
-
-    if expected and doc_type not in expected and doc_type != "other":
+        }))
+    elif expected and doc_type not in expected and doc_type != "other":
         payload = rejection_builder.build(
             {**document, "doc_type": doc_type},
             [R.RuleResult("VR-00", False, R.REASON_WRONG_TYPE,
                           f"This looks like a {doc_type.replace('_', ' ')}, but this claim "
                           f"needs: {', '.join(t.replace('_', ' ') for t in expected)}.",
                           {"found": doc_type, "expected": expected})],
-            ocr, document, trace_id=trace_id,
+            ocr, document, trace_id=state["trace_id"],
         )
-        return _finish(doc_id, "REJECTED_TYPE", trace_id, claim_id, payload)
+        update.update(_verdict("REJECTED_TYPE", payload))
+    return update
 
-    # --- 4. extract -----------------------------------------------------
+
+def _extract_node(state: DocState) -> dict[str, Any]:
+    doc_id = state["doc_id"]
     _set_status(doc_id, "EXTRACTING")
-    fields = extract(ocr, doc_type, trace_id)
+    fields = extract(state["ocr"], state["doc_type"], state["trace_id"])
     extraction_conf = float(fields.pop("_confidence", 0.5))
     fields.pop("_source", None)
-    dropped = fields.pop("_dropped_unverifiable", [])
+    fields.pop("_dropped_unverifiable", [])
     execute("UPDATE document SET extracted_fields = ?, extraction_conf = ? WHERE id = ?",
             (json.dumps(fields), extraction_conf, doc_id))
+    return {"fields": fields, "extraction_conf": extraction_conf}
 
-    # --- 5. validate (deterministic) ------------------------------------
+
+def _validate_node(state: DocState) -> dict[str, Any]:
+    """Deterministic rules — the model never decides whether a rule passed."""
+    doc_id, document = state["doc_id"], state["document"]
     _set_status(doc_id, "VALIDATING")
-    duplicate = find_duplicate(sha256, doc_id)
+    duplicate = find_duplicate(state["sha256"], doc_id)
     ctx = {
-        "doc_type": doc_type,
+        "doc_type": state["doc_type"],
         "incident_date": document["incident_date"],
         "coverage_limit": document["coverage_limit"],
         "policyholder_name": document["policyholder_name"],
-        "page_count": ocr.page_count,
+        "page_count": state["ocr"].page_count,
         "duplicate_of": duplicate,
     }
-    results = R.run_all(fields, ctx)
+    results = R.run_all(state["fields"], ctx)
     for result in results:
         execute(
             """INSERT INTO document_validation (id, document_id, rule_id, passed, details, run_at)
@@ -395,49 +449,112 @@ def process(doc_id: str) -> dict[str, Any]:
              json.dumps({"message": result.message, "details": result.details}, default=str),
              _now()),
         )
+    return {"duplicate": duplicate, "results": results,
+            "failures": [r for r in results if not r.passed]}
 
-    failures = [r for r in results if not r.passed]
 
-    # --- 6. confidence gate (§11.6) -------------------------------------
-    overall = round(0.3 * ocr.quality + 0.3 * classification["confidence"]
-                    + 0.4 * extraction_conf, 3)
-
-    # --- 7. fraud signals -> human, never an accusation -----------------
+def _gate_node(state: DocState) -> dict[str, Any]:
+    """Confidence gate (§11.6) and fraud signals — to a human, never an accusation."""
+    doc_id, claim_id = state["doc_id"], state["claim_id"]
+    overall = round(0.3 * state["ocr"].quality + 0.3 * state["classification"]["confidence"]
+                    + 0.4 * state["extraction_conf"], 3)
+    duplicate = state.get("duplicate")
     if duplicate and not duplicate["same_claim"]:
         raise_fraud_signal(claim_id, doc_id, "DUPLICATE_ACROSS_CLAIMS",
                            f"Identical document also filed on claim "
                            f"{duplicate['claim_number']}.", 0.8)
-        return _finish(doc_id, "NEEDS_REVIEW", trace_id, claim_id,
-                       {**_specialist_payload(doc_id), "recommendation": "REVIEW"},
-                       overall=overall)
+        return {"overall": overall,
+                **_verdict("NEEDS_REVIEW", {**_specialist_payload(doc_id),
+                                            "recommendation": "REVIEW"}, overall)}
 
-    date_failure = next((f for f in failures if f.details
+    date_failure = next((f for f in state["failures"] if f.details
                          and f.details.get("direction") == "before_incident"), None)
     if date_failure:
-        raise_fraud_signal(claim_id, doc_id, "PRE_INCIDENT_DATE",
-                           date_failure.message, 0.6)
+        raise_fraud_signal(claim_id, doc_id, "PRE_INCIDENT_DATE", date_failure.message, 0.6)
 
-    if overall < settings.auto_verdict_floor:
-        return _finish(doc_id, "NEEDS_REVIEW", trace_id, claim_id,
-                       _specialist_payload(doc_id), overall=overall)
+    if overall < get_settings().auto_verdict_floor:
+        return {"overall": overall,
+                **_verdict("NEEDS_REVIEW", _specialist_payload(doc_id), overall)}
+    return {"overall": overall}
 
-    # --- 8. verdict -----------------------------------------------------
-    # The pipeline recommends; a case handler decides. Documents are evidence
-    # for a payout, so nothing is accepted onto a claim without a person having
-    # looked — the AI's job is to do the reading and put a recommendation in
-    # front of them, not to sign it off (§11.6, §17.3).
-    if failures:
+
+def _verdict_node(state: DocState) -> dict[str, Any]:
+    """The pipeline recommends; a case handler decides (§11.6, §17.3).
+
+    Nothing is accepted onto a claim without a person having looked — the AI
+    does the reading and puts a recommendation in front of them.
+    """
+    doc_id, document, doc_type = state["doc_id"], state["document"], state["doc_type"]
+    overall = state["overall"]
+    if state["failures"]:
         payload = rejection_builder.build({**document, "doc_type": doc_type},
-                                          failures, ocr, document, trace_id=trace_id)
+                                          state["failures"], state["ocr"], document,
+                                          trace_id=state["trace_id"])
         payload["recommendation"] = "REJECT"
-        return _finish(doc_id, "NEEDS_REVIEW", trace_id, claim_id, payload,
-                       overall=overall)
+        return _verdict("NEEDS_REVIEW", payload, overall)
 
-    # Clean: recommended for acceptance, still queued for a handler.
     execute("UPDATE required_document SET state = 'IN_REVIEW' "
-            "WHERE claim_id = ? AND doc_type = ?", (claim_id, doc_type))
-    return _finish(doc_id, "NEEDS_REVIEW", trace_id, claim_id,
-                   _recommend_accept(doc_id, doc_type), overall=overall)
+            "WHERE claim_id = ? AND doc_type = ?", (state["claim_id"], doc_type))
+    return _verdict("NEEDS_REVIEW", _recommend_accept(doc_id, doc_type), overall)
+
+
+def _finish_node(state: DocState) -> dict[str, Any]:
+    verdict = state["verdict"] or {}
+    result = _finish(state["doc_id"], verdict["status"], state["trace_id"],
+                     state["claim_id"], verdict.get("payload"), overall=verdict.get("overall"))
+    telemetry.DOCUMENT_VERDICTS.labels(
+        verdict["status"], (verdict.get("payload") or {}).get("reason_code") or "-").inc()
+    return {"result": result}
+
+
+def _next(default: str):
+    def route(state: DocState) -> str:
+        return "finish" if state.get("verdict") else default
+    return route
+
+
+def build_graph() -> Any:
+    from langgraph.graph import END, START, StateGraph
+
+    g = StateGraph(DocState)
+    stages = [("load", _load), ("scan", _scan_node), ("ocr", _ocr_node),
+              ("classify", _classify_node), ("extract", _extract_node),
+              ("validate", _validate_node), ("gate", _gate_node),
+              ("verdict", _verdict_node), ("finish", _finish_node)]
+    for name, fn in stages:
+        g.add_node(name, telemetry.instrument(GRAPH, name, fn))
+
+    g.add_edge(START, "load")
+    g.add_conditional_edges("load", lambda s: END if s.get("result") else "scan",
+                            ["scan", END])
+    g.add_conditional_edges("scan", _next("ocr"), ["ocr", "finish"])
+    g.add_conditional_edges("ocr", _next("classify"), ["classify", "finish"])
+    g.add_conditional_edges("classify", _next("extract"), ["extract", "finish"])
+    g.add_edge("extract", "validate")
+    g.add_edge("validate", "gate")
+    g.add_conditional_edges("gate", _next("verdict"), ["verdict", "finish"])
+    g.add_edge("verdict", "finish")
+    g.add_edge("finish", END)
+    return g.compile()
+
+
+@lru_cache(maxsize=1)
+def compiled() -> Any:
+    return build_graph()
+
+
+def process(doc_id: str) -> dict[str, Any]:
+    """Full pipeline for one document. Safe to call from a worker thread, and a
+    drop-in Celery task body: it takes an id and writes its own state."""
+    trace_id = str(uuid.uuid4())
+    with telemetry.span("documents.process", **{"cc.trace_id": trace_id,
+                                                "cc.document_id": doc_id}):
+        final = compiled().invoke({"doc_id": doc_id, "trace_id": trace_id, "verdict": None},
+                                  {"run_name": "document_pipeline",
+                                   "metadata": {"doc_id": doc_id, "trace_id": trace_id}})
+    telemetry.GRAPH_RUNS.labels(GRAPH, "ok" if final.get("result", {}).get("status") != "ERROR"
+                                else "error").inc()
+    return final["result"]
 
 
 def _recommend_accept(doc_id: str, doc_type: str) -> dict[str, Any]:

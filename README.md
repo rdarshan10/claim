@@ -274,7 +274,21 @@ greeting, out_of_scope} → offer human → compose → output guard ⇄ regener
 adapter turns them into nodes. Streaming frames go out through LangGraph's custom
 stream channel.
 
-Every super-step is checkpointed (`GRAPH_CHECKPOINTER=sqlite|memory|none`,
+The other workflows are graphs too:
+
+| Graph | File | Shape |
+|---|---|---|
+| Document verification | `documents/pipeline.py` | load → scan → ocr → classify → extract → validate → gate → verdict, any stage short-circuiting to one `finish` node that writes the verdict |
+| Claim registration (scripted and agentic bots) | `fnol/run_graph.py` | drive → materialise → record_success → notify, any failure → record_failure (FNOL back to the queue) |
+| Reviewer relay and information requests | `agents/relay_graph.py` | render → ground (the reviewer's words are the only source of fact) → deliver |
+| AIOps | `aiops/graph.py` | see below |
+
+Each port was diffed against the original code on the same seeded data with
+the LLM off: 60/60 conversation turns, 20/20 documents, 5/5 registration runs
+(including the failure path) and 3/3 relays came out identical
+(`tests/parity_script.py`, `tests/workflow_parity.py`).
+
+Conversation turns are checkpointed (`GRAPH_CHECKPOINTER=sqlite|memory|none`,
 file at `GRAPH_CHECKPOINT_PATH`) under the thread `conv:<conversation_id>`, so
 any turn can be replayed node by node:
 `GET /api/v1/admin/graph/conversations/{id}/history`.
@@ -329,9 +343,8 @@ and `AIOPS_AUTO_REMEDIATE=false` makes low-risk fixes wait for approval too.
 .venv\Scripts\python -m pytest
 ```
 
-The suite runs in template mode against a throwaway database.
-`tests/parity_script.py` holds the scripted conversations that were diffed
-against the pre-LangGraph engine (60/60 identical).
+The suite (40 tests) runs in template mode against a throwaway database. CI
+(`.github/workflows/ci.yml`) runs it plus the eval gates on every push.
 
 ## Layout
 

@@ -22,9 +22,7 @@ from typing import Any
 
 from app.audit import logger as audit
 from app.db import execute
-from app.guardrails import output_guards
 from app.guardrails.input_guards import wrap_untrusted
-from app.llm import gateway
 from app.repositories import conversations as conv_repo
 
 TONE_BY_SENTIMENT = {
@@ -49,62 +47,30 @@ def deliver_reviewer_response(
     Falls back to quoting the reviewer word-for-word whenever the rendering
     can't be verified against their note — a safe answer beats a smooth one.
     """
-    trace_id = str(uuid.uuid4())
+    from app.agents import relay_graph
+
     actions = actions or []
     note = note.strip()
-
     verbatim = f"I asked {agent_name} from our claims team, and here's their answer:\n\n“{note}”"
-    rendered, source = verbatim, "verbatim"
 
-    if not force_verbatim:
-        result = gateway.complete(
-            "human_relay",
-            {
-                "agent_name": agent_name,
-                "human_note": wrap_untrusted("reviewer_note", note),
-                "actions": "\n".join(f"- {a}" for a in actions) or "(none)",
-                "tone_profile": TONE_BY_SENTIMENT.get(sentiment, "neutral-warm"),
-            },
-            tier="primary",
-            trace_id=trace_id,
-            fallback="",
-        )
-        candidate = result.text.strip()
-
-        # The reviewer's note is the only permitted source of fact. If the
-        # re-voicing introduced anything else, we quote them instead.
-        check = output_guards.check_output(candidate, {"reviewer_note": note,
-                                                       "actions": actions,
-                                                       "agent_name": agent_name})
-        if candidate and check.passed:
-            rendered = candidate
-            source = "template" if result.degraded else result.model
-        else:
-            audit.record(
-                "relay_rendering_rejected", actor_type="agent", actor_id=agent_name,
-                entity_type="conversation", entity_id=conversation_id,
-                payload={"failures": check.failures, "ungrounded": check.ungrounded},
-                trace_id=trace_id,
-            )
-
-    # Posted as the assistant: the customer only ever hears one voice. The
-    # reviewer is recorded in author_name for attribution, and their original
-    # wording alongside it so the relay can be checked for drift.
-    message_id = conv_repo.add_message(
-        conversation_id, "assistant", rendered, author_name=agent_name,
-        source_note=note, relay_source=source,
+    final = relay_graph.run(
+        kind="relay", conversation_id=conversation_id, agent_name=agent_name,
+        trace_id=str(uuid.uuid4()), prompt_key="human_relay",
+        variables={
+            "agent_name": agent_name,
+            "human_note": wrap_untrusted("reviewer_note", note),
+            "actions": "\n".join(f"- {a}" for a in actions) or "(none)",
+            "tone_profile": TONE_BY_SENTIMENT.get(sentiment, "neutral-warm"),
+        },
+        model_fallback="", safe_text=verbatim, safe_source="verbatim",
+        # The reviewer's note is the only permitted source of fact.
+        grounding_source={"reviewer_note": note, "actions": actions,
+                          "agent_name": agent_name},
+        source_note=note, skip_model=force_verbatim, actions=actions,
     )
-
-    audit.record(
-        "reviewer_response_delivered", actor_type="agent", actor_id=agent_name,
-        entity_type="conversation", entity_id=conversation_id,
-        payload={"source": source, "verbatim_fallback": source == "verbatim",
-                 "actions": actions, "note_preview": note[:200]},
-        trace_id=trace_id,
-    )
-
-    return {"message_id": message_id, "content": rendered, "relayed_from": agent_name,
-            "source": source, "verbatim": source == "verbatim"}
+    source = final["source"]
+    return {"message_id": final["message_id"], "content": final["rendered"],
+            "relayed_from": agent_name, "source": source, "verbatim": source == "verbatim"}
 
 
 def request_information(
@@ -123,51 +89,30 @@ def request_information(
     """
     import json
 
-    trace_id = str(uuid.uuid4())
-    request = request.strip()
+    from app.agents import relay_graph
 
+    request = request.strip()
     fallback = (
         f"To move your claim forward we need: {request}\n\n"
         f"Send it here whenever you're ready and I'll check it straight away. "
         f"If you're not sure how to get hold of it, tell me and I'll find out for you."
     )
-
-    result = gateway.complete(
-        "information_request",
-        {
+    final = relay_graph.run(
+        kind="request", conversation_id=conversation_id, agent_name=agent_name,
+        trace_id=str(uuid.uuid4()), prompt_key="information_request",
+        variables={
             "request": wrap_untrusted("reviewer_request", request),
             "agent_name": agent_name,
             "claim_context": json.dumps(claim_context or {}, default=str),
             "tone_profile": TONE_BY_SENTIMENT.get(sentiment, "neutral-warm"),
         },
-        tier="primary",
-        trace_id=trace_id,
-        fallback=fallback,
+        model_fallback=fallback, safe_text=fallback, safe_source="information_request",
+        # The request is the only source of fact; anything else gets the plain version.
+        grounding_source={"request": request, "claim": claim_context or {}},
+        source_note=request, skip_model=False,
     )
-
-    rendered = result.text.strip() or fallback
-
-    # The request is the only source of fact; anything else gets the plain version.
-    check = output_guards.check_output(rendered, {"request": request,
-                                                  "claim": claim_context or {}})
-    if not check.passed:
-        audit.record(
-            "info_request_rendering_rejected", actor_type="agent", actor_id=agent_name,
-            entity_type="conversation", entity_id=conversation_id,
-            payload={"failures": check.failures, "ungrounded": check.ungrounded},
-            trace_id=trace_id,
-        )
-        rendered = fallback
-
-    message_id = conv_repo.add_message(
-        conversation_id, "assistant", rendered, author_name=agent_name,
-        source_note=request, relay_source="information_request",
-    )
-    audit.record("information_requested", actor_type="agent", actor_id=agent_name,
-                 entity_type="conversation", entity_id=conversation_id,
-                 payload={"request": request[:300]}, trace_id=trace_id)
-
-    return {"message_id": message_id, "content": rendered, "request": request}
+    return {"message_id": final["message_id"], "content": final["rendered"],
+            "request": request}
 
 
 def announce_case_taken(conversation_id: str, agent_name: str,
