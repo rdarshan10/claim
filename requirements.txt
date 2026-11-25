@@ -1,0 +1,22 @@
+fastapi
+uvicorn[standard]
+pydantic
+httpx
+requests
+PyYAML
+python-multipart
+groq
+openai
+langchain-core
+langchain-openai
+langgraph>=1.0
+langgraph-checkpoint-sqlite
+# telemetry (optional: the app runs without these)
+prometheus-client
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+# tests
+pytest
+# optional: registration bot drives a real browser when installed
+# playwright

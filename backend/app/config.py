@@ -86,6 +86,28 @@ class Settings:
     auto_verdict_floor: float = 0.70
     rag_relevance_floor: float = float(os.getenv("RAG_RELEVANCE_FLOOR", "0.12"))
 
+    # --- LangGraph runtime ---------------------------------------------
+    # Where graph checkpoints live. "sqlite" keeps every super-step of every
+    # conversation turn and AIOps run (replayable, and required for an AIOps
+    # approval to survive a restart); "memory" is per-process; "none" turns
+    # checkpointing off for the conversation graph (AIOps falls back to memory,
+    # since an approval pause needs somewhere to wait).
+    graph_checkpointer: str = os.getenv("GRAPH_CHECKPOINTER", "sqlite").lower()
+    graph_checkpoint_path: str = os.getenv(
+        "GRAPH_CHECKPOINT_PATH", str(BASE_DIR / "data" / "graph_checkpoints.db"))
+
+    # --- AIOps -----------------------------------------------------------
+    # The operations agent sweeps the system's own signals on a timer, opens
+    # incidents, auto-applies low-risk playbooks and pauses for a manager on
+    # anything that changes customer-facing behaviour.
+    aiops_enabled: bool = os.getenv("AIOPS_ENABLED", "true").lower() == "true"
+    aiops_interval_seconds: int = int(os.getenv("AIOPS_INTERVAL_SECONDS", "300"))
+    aiops_window_minutes: int = int(os.getenv("AIOPS_WINDOW_MINUTES", "60"))
+    # Low-risk playbooks run without asking when true. High-risk ones always ask.
+    aiops_auto_remediate: bool = os.getenv("AIOPS_AUTO_REMEDIATE", "true").lower() == "true"
+    # An incident for the same detectors is not reopened inside this window.
+    aiops_cooldown_minutes: int = int(os.getenv("AIOPS_COOLDOWN_MINUTES", "30"))
+
     def __init__(self) -> None:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         Path(self.blob_dir).mkdir(parents=True, exist_ok=True)
