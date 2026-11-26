@@ -1,0 +1,518 @@
+<title>ClaimCompanion Agent Graph</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+/* Layout: sticky table of contents on the left, one reading column of
+   diagrams and reference tables on the right; stacks to one column on phones. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --ink: #18202b;
+  --ink-2: #4a5566;
+  --ink-3: #7a8495;
+  --line: #dde2ea;
+  --accent: #2b6cb0;
+  --accent-soft: #e6eef8;
+  --llm: #6d5bd0;
+  --llm-soft: #eeebfb;
+  --human: #b8651e;
+  --human-soft: #fbefe3;
+  --code-bg: #eef1f5;
+  --display: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11151b; --surface: #181e26; --ink: #e6eaf0; --ink-2: #b3bcc8; --ink-3: #8691a1;
+    --line: #2a323d; --accent: #6ea8e8; --accent-soft: #1b2a3c; --llm: #a596f2; --llm-soft: #251f3d;
+    --human: #e3a05f; --human-soft: #33241a; --code-bg: #1f2630; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11151b; --surface: #181e26; --ink: #e6eaf0; --ink-2: #b3bcc8; --ink-3: #8691a1;
+  --line: #2a323d; --accent: #6ea8e8; --accent-soft: #1b2a3c; --llm: #a596f2; --llm-soft: #251f3d;
+  --human: #e3a05f; --human-soft: #33241a; --code-bg: #1f2630; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.6;
+       padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.shell { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 40px; padding-block: 40px 80px; }
+nav.toc { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 24px); align-self: start; font-size: 13px; }
+nav.toc .label { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 10px; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; counter-reset: s; }
+nav.toc a { display: block; padding: 4px 10px; border-radius: 6px; color: var(--ink-2); text-decoration: none; border-left: 2px solid transparent; }
+nav.toc a:hover { color: var(--ink); background: var(--surface); }
+nav.toc a:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+main { min-width: 0; display: grid; gap: 56px; }
+header h1 { font-family: var(--display); font-weight: 600; font-size: clamp(28px, 4vw, 40px); line-height: 1.15; margin: 0 0 12px; text-wrap: balance; letter-spacing: -.01em; }
+.eyebrow { font-family: var(--mono); font-size: 12px; color: var(--accent); letter-spacing: .06em; text-transform: uppercase; margin-bottom: 10px; }
+.lede { max-width: 68ch; color: var(--ink-2); font-size: 16px; margin: 0; }
+.facts { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-top: 22px; font-size: 13px; color: var(--ink-2); }
+.facts b { font-family: var(--mono); font-weight: 500; color: var(--ink); font-size: 18px; display: block; font-variant-numeric: tabular-nums; }
+section { display: grid; gap: 16px; scroll-margin-top: 24px; }
+h2 { font-family: var(--display); font-weight: 600; font-size: 22px; margin: 0; text-wrap: balance; }
+h3 { font-family: var(--display); font-weight: 500; font-size: 17px; margin: 8px 0 0; }
+p { margin: 0; max-width: 72ch; }
+.sub { color: var(--ink-2); }
+code, .mono { font-family: var(--mono); font-size: .88em; }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+figure { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 20px 16px 14px; overflow-x: auto; }
+figure pre.mermaid { margin: 0; background: none; text-align: center; min-width: 560px; }
+figcaption { font-size: 13px; color: var(--ink-2); margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); max-width: 80ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12.5px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid; display: inline-block; }
+.sw.llm { background: var(--llm-soft); border-color: var(--llm); }
+.sw.det { background: var(--surface); border-color: var(--ink-3); }
+.sw.hum { background: var(--human-soft); border-color: var(--human); }
+.sw.exit { background: var(--surface); border-color: var(--ink-3); border-style: dashed; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.card header { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.card h3 { margin: 0; }
+.pill { font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 99px; white-space: nowrap; border: 1px solid; }
+.pill.llm { color: var(--llm); background: var(--llm-soft); border-color: var(--llm); }
+.pill.det { color: var(--ink-2); border-color: var(--line); }
+.card dl { margin: 0; display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 6px 12px; font-size: 13.5px; }
+.card dt { color: var(--ink-3); font-size: 12px; padding-top: 2px; }
+.card dd { margin: 0; min-width: 0; }
+.card .rule { font-size: 13px; color: var(--ink-2); border-top: 1px solid var(--line); padding-top: 10px; }
+.tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 620px; }
+th { text-align: left; font-weight: 600; font-size: 12px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--bg); }
+td { padding: 9px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+td:first-child { font-family: var(--mono); font-size: 13px; white-space: nowrap; }
+pre.tree { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; font-family: var(--mono); font-size: 13px; line-height: 1.65; overflow-x: auto; color: var(--ink-2); }
+pre.tree b { color: var(--ink); font-weight: 500; }
+.note { border-left: 3px solid var(--accent); border-radius: 0; padding: 4px 0 4px 14px; color: var(--ink-2); font-size: 14px; max-width: 76ch; }
+@media (max-width: 860px) {
+  .shell { grid-template-columns: minmax(0, 1fr); gap: 24px; padding-block: 24px 56px; }
+  nav.toc { position: static; }
+  nav.toc ol { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+html { scroll-behavior: smooth; }
+</style>
+
+<div class="shell">
+<nav class="toc" aria-label="Contents">
+  <div class="label">Contents</div>
+  <ol>
+    <li><a href="#agents">Agent map</a></li>
+    <li><a href="#roster">Agent roster</a></li>
+    <li><a href="#turn">Conversation graph</a></li>
+    <li><a href="#state">Turn state</a></li>
+    <li><a href="#shared">How agents share work</a></li>
+    <li><a href="#documents">Document verifier</a></li>
+    <li><a href="#registration">Registration bot</a></li>
+    <li><a href="#relay">Reviewer relay</a></li>
+    <li><a href="#aiops">AIOps agent</a></li>
+    <li><a href="#runtime">Runtime</a></li>
+    <li><a href="#files">File map</a></li>
+  </ol>
+</nav>
+
+<main>
+<header>
+  <div class="eyebrow">Architecture reference · branch feat/langgraph-aiops</div>
+  <h1>How ClaimCompanion's agents are orchestrated</h1>
+  <p class="lede">Every customer turn runs as one LangGraph <code>StateGraph</code>: guardrails, a supervisor that routes, one of five specialist agents, an empathy responder, and an output check. Five back-office agents run in graphs of their own and coordinate through the claims database rather than by calling each other. The model writes and classifies; it never decides a claim outcome.</p>
+  <div class="facts">
+    <div><b>5</b>compiled graphs</div>
+    <div><b>8</b>conversation agents and guards</div>
+    <div><b>20</b>nodes in a chat turn</div>
+    <div><b>15</b>versioned prompts</div>
+    <div><b>2</b>checkpointed graphs</div>
+  </div>
+</header>
+
+<section id="agents">
+  <h2>Agent map</h2>
+  <p class="sub">Who handles a customer message, and where a person comes in. Every node in this picture is a real function; the labels name it.</p>
+  <div class="legend">
+    <span><i class="sw llm"></i>Calls the LLM</span>
+    <span><i class="sw det"></i>Deterministic code</span>
+    <span><i class="sw hum"></i>A person</span>
+    <span>Dotted arrow: crosses to the human side</span>
+  </div>
+  <figure>
+<pre class="mermaid">
+flowchart TB
+  C(["Customer message<br/>POST /chat/conversations/{id}/messages"])
+  IG["Input guardrails<br/>input_guards.check_input<br/>regex, no model, ~15 ms"]
+  BL["Safe reply<br/>injection · out of scope · distress"]
+  SUP["Supervisor<br/>supervisor.route<br/>classify_turn on the mini model<br/>+ regex heuristics that can override it"]
+  C --> IG
+  IG -- "blocked" --> BL
+  IG -- "allowed" --> SUP
+  subgraph SPEC["Specialist agents · one per turn, chosen by intent"]
+    direction LR
+    FN["FNOL intake<br/>fnol_agent.run"]
+    CS["Claim status<br/>claim_status.run"]
+    DA["Documents<br/>document.run"]
+    KA["Knowledge<br/>knowledge.run"]
+    ES["Escalation<br/>escalation.run"]
+  end
+  SUP -- "new_claim" --> FN
+  SUP -- "claim_status" --> CS
+  SUP -- "documents" --> DA
+  SUP -- "knowledge" --> KA
+  SUP -- "human_request" --> ES
+  SPEC -- "facts + cards" --> EM["Empathy responder<br/>empathy.run<br/>empathy_responder on the primary model"]
+  EM --> OG["Output guardrails<br/>output_guards.check_output<br/>retry once, then template"]
+  OG -- "token, card, done frames" --> R(["Reply streamed to the chat"])
+  BL -. "distress also opens a case" .-> ES
+  ES -. "case + context packet" .-> HR(["Claims reviewer"])
+  HR -. "asks about the case" .-> CP["Reviewer copilot<br/>reviewer_copilot prompt"]
+  HR -. "writes a note" .-> RL["Relay agent<br/>relay_graph · human_relay"]
+  RL -. "re-voiced, checked against the note" .-> R
+  classDef llm fill:#8b7cf62a,stroke:#7f6ee0,stroke-width:1.5px
+  classDef human fill:#e0803a2a,stroke:#d0782f,stroke-width:1.5px
+  classDef exit stroke-dasharray:5 4
+  class SUP,KA,EM,CP,RL llm
+  class HR human
+  class BL exit
+</pre>
+    <figcaption>The supervisor picks exactly one specialist per turn; the turn hop budget (<code>MAX_TURN_HOPS</code>, default 3) caps it. Specialists produce <em>facts</em> from tools, and only the empathy responder turns them into prose, so the output check always has a source for every number, date and reference it sees.</figcaption>
+  </figure>
+</section>
+
+<section id="roster">
+  <h2>Agent roster</h2>
+  <p class="sub">What each agent can touch. Tools are plain Python functions scoped by the <code>customer_id</code> from the JWT, never by anything in the message text.</p>
+  <div class="cards">
+    <article class="card">
+      <header><h3>Supervisor</h3><span class="pill llm">mini model</span></header>
+      <dl>
+        <dt>File</dt><dd><code>agents/supervisor.py</code></dd>
+        <dt>Entry</dt><dd><code>route(state)</code>, <code>is_small_talk()</code></dd>
+        <dt>Prompt</dt><dd><code>classify_turn</code>: intent and sentiment in one call</dd>
+        <dt>Fallback</dt><dd><code>_heuristic_intent()</code>, <code>_heuristic_sentiment()</code></dd>
+        <dt>Writes</dt><dd>intent, confidence, sentiment, tone_profile</dd>
+      </dl>
+      <p class="rule">A regex-detected human request or distress always wins over the model.</p>
+    </article>
+    <article class="card">
+      <header><h3>FNOL intake</h3><span class="pill det">deterministic</span></header>
+      <dl>
+        <dt>File</dt><dd><code>agents/fnol_agent.py</code></dd>
+        <dt>Entry</dt><dd><code>run(state)</code>, <code>wants_to_start()</code></dd>
+        <dt>Tools</dt><dd><code>intake.open_for_customer</code>, <code>create</code>, <code>next_field</code>, <code>normalise</code>, <code>save_answer</code>, <code>question_card</code></dd>
+        <dt>Writes</dt><dd><code>fnol_request</code> row, question cards</dd>
+      </dl>
+      <p class="rule">An open intake captures the next message, unless it is plainly a question about existing claims.</p>
+    </article>
+    <article class="card">
+      <header><h3>Claim status</h3><span class="pill det">deterministic</span></header>
+      <dl>
+        <dt>File</dt><dd><code>agents/claim_status.py</code></dd>
+        <dt>Entry</dt><dd><code>run(state)</code></dd>
+        <dt>Tools</dt><dd><code>claim_tools.get_claims</code>, <code>get_claim_detail</code>, <code>resolve_reference</code>, <code>resolve_other</code>, <code>get_status_history</code>, <code>predict_timeline</code>, <code>get_required_documents</code></dd>
+        <dt>Cards</dt><dd><code>claim_timeline</code>, <code>action_needed</code></dd>
+      </dl>
+      <p class="rule">Read-only: no tool it holds can change a claim.</p>
+    </article>
+    <article class="card">
+      <header><h3>Documents</h3><span class="pill det">deterministic</span></header>
+      <dl>
+        <dt>File</dt><dd><code>agents/document.py</code></dd>
+        <dt>Entry</dt><dd><code>run(state)</code></dd>
+        <dt>Tools</dt><dd><code>claim_tools.get_claims</code>, <code>resolve_reference</code>, <code>get_claim_detail</code>, <code>get_required_documents</code></dd>
+        <dt>Cards</dt><dd><code>action_needed</code>, <code>doc_rejection</code>, <code>claim_timeline</code></dd>
+      </dl>
+      <p class="rule">Reports verdicts the document verifier already wrote; it never judges a document itself.</p>
+    </article>
+    <article class="card">
+      <header><h3>Knowledge</h3><span class="pill llm">primary model</span></header>
+      <dl>
+        <dt>File</dt><dd><code>agents/knowledge.py</code></dd>
+        <dt>Entry</dt><dd><code>run(state)</code></dd>
+        <dt>Tools</dt><dd><code>retriever.search_with_floor</code> (BM25, floor 0.12), <code>guidance.answer_for</code></dd>
+        <dt>Prompt</dt><dd><code>knowledge_answer</code>, with citations</dd>
+      </dl>
+      <p class="rule">Imports no claim repository, so a captured prompt still can't reach customer data. Below the floor it says it doesn't know.</p>
+    </article>
+    <article class="card">
+      <header><h3>Escalation</h3><span class="pill det">deterministic</span></header>
+      <dl>
+        <dt>File</dt><dd><code>agents/escalation.py</code></dd>
+        <dt>Entry</dt><dd><code>run(state)</code>, <code>touch_case()</code>, <code>_reassure()</code></dd>
+        <dt>Writes</dt><dd><code>escalation_ticket</code> + context packet; conversation mode → AWAITING</dd>
+        <dt>Cards</dt><dd><code>handoff</code>, <code>handoff_status</code></dd>
+      </dl>
+      <p class="rule">One open case per customer: asking again chases it and updates the packet.</p>
+    </article>
+    <article class="card">
+      <header><h3>Empathy responder</h3><span class="pill llm">primary model</span></header>
+      <dl>
+        <dt>File</dt><dd><code>agents/empathy.py</code></dd>
+        <dt>Entry</dt><dd><code>run(state)</code>, <code>_template(state)</code></dd>
+        <dt>Prompt</dt><dd><code>empathy_responder</code>, tone from sentiment</dd>
+        <dt>Reads</dt><dd>Only <code>state.facts</code>; it has no tools</dd>
+      </dl>
+      <p class="rule">Skips re-voicing knowledge drafts and intake questions, which are already exact.</p>
+    </article>
+    <article class="card">
+      <header><h3>Guardrails</h3><span class="pill det">deterministic</span></header>
+      <dl>
+        <dt>Input</dt><dd><code>input_guards.check_input</code>: injection, scope, distress</dd>
+        <dt>Output</dt><dd><code>output_guards.check_output</code>: every fact must appear in the tool results</dd>
+        <dt>PII</dt><dd><code>pii.redact</code> on every prompt before it leaves the process</dd>
+      </dl>
+      <p class="rule">Untrusted text reaches prompts only inside <code>wrap_untrusted()</code> tags.</p>
+    </article>
+  </div>
+</section>
+
+<section id="turn">
+  <h2>Conversation graph, node by node</h2>
+  <p class="sub"><code>agents/graph.py</code> · <code>build_graph()</code> compiled once, run by <code>run_turn()</code>. Labels on arrows are the conditions in the conditional edges.</p>
+  <figure>
+<pre class="mermaid">
+flowchart TB
+  S((start)) --> IG["input_guard<br/>check_input"]
+  IG -- "blocked" --> BL["blocked<br/>audit · escalation if distress"]
+  IG -- "greeting, thanks, bye" --> ST["small_talk<br/>_greeting_reply"]
+  IG -- "anything else" --> RT["route<br/>supervisor.route"]
+  RT --> OV["overrides<br/>_accepted_offer · wants_to_start<br/>open intake capture"]
+  OV --> TC["touch_case<br/>escalation.touch_case if a case is open"]
+  TC -- "greeting" --> GR["greeting"]
+  TC -- "out_of_scope" --> OS["out_of_scope"]
+  TC -- "human_request" --> ESC["escalation<br/>escalation.run"]
+  TC -- "new_claim" --> A1["agent_new_claim"]
+  TC -- "claim_status" --> A2["agent_claim_status"]
+  TC -- "documents" --> A3["agent_documents"]
+  TC -- "knowledge or unknown" --> A4["agent_knowledge"]
+  ESC & A1 & A2 & A3 & A4 --> OH["offer_human<br/>offers a colleague once, if frustrated"]
+  OH --> CO["compose<br/>empathy.run"]
+  CO --> OG{"output_guard<br/>check_output"}
+  OG -- "pass" --> EM["emit<br/>stream frames · _audit_turn"]
+  OG -- "fail, attempt 1" --> RG["regenerate<br/>empathy.run again"]
+  RG --> OG
+  OG -- "fail, attempt 2" --> TF["template_fallback<br/>empathy._template"]
+  TF --> EM
+  ST & GR & OS --> FI["finalize<br/>reply · _audit_turn"]
+  BL --> E((end))
+  FI --> E
+  EM --> E
+  classDef llm fill:#8b7cf62a,stroke:#7f6ee0,stroke-width:1.5px
+  class RT,A4,CO,RG llm
+</pre>
+    <figcaption>Each node is <code>_node(name, fn)</code>: it rebuilds a <code>GraphState</code> from the graph's dict, runs the existing agent function, and returns every field as the update, so the agents didn't need rewriting. <code>telemetry.instrument()</code> wraps it with a span and a latency histogram. Frames for the WebSocket go out through LangGraph's custom stream (<code>get_stream_writer()</code>).</figcaption>
+  </figure>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Node</th><th>Calls</th><th>Routes to</th></tr></thead>
+      <tbody>
+        <tr><td>input_guard</td><td><code>input_guards.check_input</code>, <code>supervisor.is_small_talk</code></td><td>blocked · small_talk · route</td></tr>
+        <tr><td>blocked</td><td>audit <code>guardrail_block</code>; <code>escalation.run</code> on distress</td><td>end</td></tr>
+        <tr><td>route</td><td><code>supervisor.route</code> → <code>gateway.complete("classify_turn", tier="mini")</code></td><td>overrides</td></tr>
+        <tr><td>overrides</td><td><code>_accepted_offer</code>, <code>fnol_agent.wants_to_start</code>, <code>intake.open_for_customer</code>, <code>_asks_about_existing</code></td><td>touch_case</td></tr>
+        <tr><td>touch_case</td><td><code>escalation.load_ticket</code>, <code>escalation.touch_case</code></td><td>by intent (<code>_dispatch</code>)</td></tr>
+        <tr><td>agent_*</td><td><code>state.hop()</code> budget, then <code>AGENTS[intent](state)</code></td><td>offer_human</td></tr>
+        <tr><td>offer_human</td><td><code>_already_offered</code>, <code>_mark_offer</code></td><td>compose</td></tr>
+        <tr><td>compose</td><td><code>empathy.run</code> → <code>gateway.complete("empathy_responder", tier="primary")</code></td><td>output_guard</td></tr>
+        <tr><td>output_guard</td><td><code>output_guards.check_output(reply, facts + citations)</code></td><td>emit · regenerate · template_fallback</td></tr>
+        <tr><td>emit / finalize</td><td>token, card, citations, done frames; <code>_audit_turn</code></td><td>end</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="state">
+  <h2>Turn state</h2>
+  <p class="sub"><code>TurnState</code> is a <code>TypedDict</code>: the 22 fields of the original <code>GraphState</code> dataclass plus six control fields. <code>run_turn</code> supplies every key, so nothing leaks from the thread's previous turn.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Group</th><th>Fields</th><th>Set by</th></tr></thead>
+      <tbody>
+        <tr><td>identity</td><td><code>customer_id</code>, <code>customer_name</code>, <code>conversation_id</code>, <code>trace_id</code></td><td>JWT and API, never the message</td></tr>
+        <tr><td>inputs</td><td><code>message</code>, <code>history</code>, <code>active_claim_id</code>, <code>handoff</code></td><td>chat API</td></tr>
+        <tr><td>routing</td><td><code>intent</code>, <code>intent_confidence</code>, <code>sentiment</code>, <code>tone_profile</code></td><td>route, overrides</td></tr>
+        <tr><td>agent output</td><td><code>facts</code>, <code>cards</code>, <code>citations</code>, <code>draft</code>, <code>reply</code></td><td>specialists, compose</td></tr>
+        <tr><td>control</td><td><code>guardrail_flags</code>, <code>blocked</code>, <code>escalation_ticket_id</code>, <code>turn_hop_count</code>, <code>degraded</code>, <code>regenerated</code></td><td>any node</td></tr>
+        <tr><td>graph only</td><td><code>route</code>, <code>block_category</code>, <code>output_attempt</code>, <code>output_passed</code>, <code>output_failures</code></td><td>input_guard, output_guard</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="shared">
+  <h2>How agents share work</h2>
+  <p class="sub">Agents never call each other directly. They write to the claims database, and other agents read it on their next turn or sweep. That keeps each agent's permissions narrow and every hand-off in the audit log.</p>
+  <figure>
+<pre class="mermaid">
+flowchart LR
+  DV["Document verifier<br/>pipeline.process"] -- "verdicts, rule results" --> DB[("Claims database<br/>SQLite")]
+  RB["Registration bot<br/>run_graph"] -- "new claim, run log" --> DB
+  FN["FNOL intake agent"] -- "fnol_request" --> DB
+  ES["Escalation agent"] -- "escalation_ticket" --> DB
+  GW["LLM gateway"] -- "llm_call meter" --> DB
+  DB -- "checklist, rejections" --> DA["Documents agent"]
+  DB -- "claim, history, prediction" --> CS["Claim status agent"]
+  DB -- "case file" --> CP["Reviewer copilot"]
+  DB -- "signals" --> AI["AIOps agent"]
+  AI -- "playbooks: requeue, re-prioritise,<br/>diary, retry registration" --> DB
+  classDef llm fill:#8b7cf62a,stroke:#7f6ee0,stroke-width:1.5px
+  class DV,RB,CP,AI llm
+</pre>
+    <figcaption>The append-only, hash-chained <code>audit_event</code> table sits beside these: every routing decision, tool call, verdict, relay and remediation lands there with the turn's <code>trace_id</code>.</figcaption>
+  </figure>
+</section>
+
+<section id="documents">
+  <h2>Document verifier</h2>
+  <p class="sub"><code>documents/pipeline.py</code> · started on upload by a background thread, <code>process(doc_id)</code>. Any stage can reach a verdict early; <code>finish</code> is the only place one is written.</p>
+  <figure>
+<pre class="mermaid">
+flowchart LR
+  L["load<br/>document + claim + policy"] -- "not found" --> X((end))
+  L --> SC["scan<br/>magic bytes, size"]
+  SC --> OC["ocr<br/>get_adapter().read"]
+  OC --> CL["classify<br/>doc_classifier · mini<br/>keyword fallback"]
+  CL --> EX["extract<br/>doc_extractor · primary<br/>values re-checked in text"]
+  EX --> VA["validate<br/>rules.run_all VR-01..08"]
+  VA --> GA["gate<br/>confidence · fraud signals"]
+  GA --> VE["verdict<br/>recommend accept or reject"]
+  SC -- "unreadable" --> FI["finish<br/>_finish · _advance_claim"]
+  OC -- "illegible" --> FI
+  CL -- "unsure or wrong type" --> FI
+  GA -- "duplicate or low confidence" --> FI
+  VE --> FI
+  FI --> X
+  classDef llm fill:#8b7cf62a,stroke:#7f6ee0,stroke-width:1.5px
+  class CL,EX llm
+</pre>
+    <figcaption>Rules are pure functions over the extracted values, so the model never decides whether a rule passed. Every outcome is <code>NEEDS_REVIEW</code> or a <code>REJECTED_*</code> status: a handler accepts documents, not the pipeline. Rejection explanations come from <code>rejection_explainer</code>. Not checkpointed, because a re-run is the recovery path.</figcaption>
+  </figure>
+</section>
+
+<section id="registration">
+  <h2>Registration bot</h2>
+  <p class="sub"><code>fnol/run_graph.py</code> · one graph shared by the scripted bot (<code>registration.py</code>) and the agentic bot (<code>agentic_registration.py</code>), which differ only in their <code>Flavor</code>.</p>
+  <figure>
+<pre class="mermaid">
+flowchart LR
+  D["drive<br/>Flavor.drive"] --> M["materialise<br/>registration._materialise"]
+  M --> RS["record_success<br/>run SUCCEEDED · FNOL REGISTERED"]
+  RS --> N["notify<br/>registration._notify_customer"]
+  N --> X((end))
+  D -- "error" --> RF["record_failure<br/>run FAILED · FNOL back to queue"]
+  M -- "error" --> RF
+  RS -- "error" --> RF
+  N -- "error" --> RF
+  RF --> X
+  classDef llm fill:#8b7cf62a,stroke:#7f6ee0,stroke-width:1.5px
+  class D llm
+</pre>
+    <figcaption>The scripted flavor drives the core system with fixed selectors, or simulates it when Playwright isn't installed. The agentic flavor reads the form and asks <code>form_mapper</code> which value goes in which field. Starting a run requires the FNOL to be <code>READY_TO_REGISTER</code>, so a reviewer has always approved it first.</figcaption>
+  </figure>
+</section>
+
+<section id="relay">
+  <h2>Reviewer relay</h2>
+  <p class="sub"><code>agents/relay_graph.py</code> · used by <code>handoff.deliver_reviewer_response</code> (kind <code>relay</code>) and <code>handoff.request_information</code> (kind <code>request</code>).</p>
+  <figure>
+<pre class="mermaid">
+flowchart LR
+  RV(["Reviewer note"]) --> RE["render<br/>human_relay or information_request<br/>skipped if exact words ticked"]
+  RE --> GR{"ground<br/>check_output against the note"}
+  GR -- "adds nothing" --> DL["deliver<br/>conv_repo.add_message"]
+  GR -- "adds a fact, empty, or exact words" --> SF["safe text<br/>reviewer quoted verbatim"]
+  SF --> DL
+  DL --> CU(["Customer's thread"])
+  classDef llm fill:#8b7cf62a,stroke:#7f6ee0,stroke-width:1.5px
+  classDef human fill:#e0803a2a,stroke:#d0782f,stroke-width:1.5px
+  class RE llm
+  class RV human
+</pre>
+    <figcaption>The assistant may re-voice a reviewer, never re-decide. The original note is stored in <code>message.source_note</code> beside what was sent, so every relay can be checked for drift.</figcaption>
+  </figure>
+</section>
+
+<section id="aiops">
+  <h2>AIOps agent</h2>
+  <p class="sub"><code>aiops/graph.py</code> · runs every <code>AIOPS_INTERVAL_SECONDS</code> (300) or on demand from Oversight → AIOps. Checkpointed under <code>aiops:&lt;run_id&gt;</code> so an approval pause survives a restart.</p>
+  <figure>
+<pre class="mermaid">
+flowchart TB
+  CO["collect<br/>signals.collect"] --> DE["detect<br/>thresholds + baseline z-score"]
+  DE --> DD["dedupe<br/>skip open or recent incidents"]
+  DD -- "nothing new" --> X((end))
+  DD --> DI["diagnose<br/>aiops_diagnose · primary<br/>rule-based fallback"]
+  DI --> OI["open_incident<br/>aiops_incident row"]
+  OI --> AR["auto_remediate<br/>low-risk playbooks"]
+  AR -- "high risk planned" --> RA["request_approval<br/>status AWAITING_APPROVAL"]
+  RA --> AP["approval<br/>interrupt() until a manager decides"]
+  MG(["Manager<br/>POST /admin/aiops/incidents/{id}/decision"]) -. "Command(resume=...)" .-> AP
+  AP --> VE["verify<br/>re-measure what fired"]
+  AR -- "nothing to approve" --> VE
+  VE --> CL["close<br/>RESOLVED · MITIGATED · OPEN"]
+  CL --> X
+  classDef llm fill:#8b7cf62a,stroke:#7f6ee0,stroke-width:1.5px
+  classDef human fill:#e0803a2a,stroke:#d0782f,stroke-width:1.5px
+  class DI llm
+  class MG,AP human
+</pre>
+    <figcaption>Detection never depends on a model. The diagnosis may only pick playbook ids registered for the detectors that fired; anything else is dropped and recorded in <code>rejected_suggestions</code>.</figcaption>
+  </figure>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Playbook</th><th>Risk</th><th>Answers</th><th>Does</th></tr></thead>
+      <tbody>
+        <tr><td>requeue_stuck_documents</td><td>low</td><td>documents_stuck</td><td>Re-runs <code>pipeline.process</code> for each stuck document</td></tr>
+        <tr><td>prioritise_breached_escalations</td><td>low</td><td>escalation_sla</td><td>Raises unassigned cases past 4 h to HIGH</td></tr>
+        <tr><td>schedule_claim_chases</td><td>low</td><td>claims_at_risk</td><td>Puts claims untouched 30+ days on today's diary</td></tr>
+        <tr><td>fail_hung_registrations</td><td>low</td><td>registration_hung</td><td>Marks stalled runs failed, FNOL back to the queue</td></tr>
+        <tr><td>clear_llm_cache</td><td>low</td><td>fallbacks, grounding, feedback</td><td>Drops cached answers and clients</td></tr>
+        <tr><td>failover_llm_provider</td><td>high</td><td>llm_errors, llm_latency</td><td><code>providers.select()</code> on the second configured provider</td></tr>
+        <tr><td>enable_template_mode</td><td>high</td><td>llm_errors, template_fallbacks</td><td>Stops model calls; replies come from templates</td></tr>
+        <tr><td>restore_llm</td><td>high</td><td>template_mode</td><td>Turns the model back on after an outage</td></tr>
+        <tr><td>retry_failed_registrations</td><td>high</td><td>registration_failures</td><td><code>registration.start()</code> again for each FNOL</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="runtime">
+  <h2>Runtime</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Piece</th><th>Where</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td>Checkpointer</td><td><code>agents/runtime.py</code></td><td>One SQLite file for all graph checkpoints. Threads: <code>conv:&lt;conversation_id&gt;</code> for chat, <code>aiops:&lt;run_id&gt;</code> for sweeps. Replay with <code>GET /admin/graph/conversations/{id}/history</code>.</td></tr>
+        <tr><td>Telemetry</td><td><code>ops/telemetry.py</code></td><td><code>instrument(graph, node, fn)</code> wraps every node: an OpenTelemetry span <code>&lt;graph&gt;.&lt;node&gt;</code>, the <code>cc_graph_node_seconds</code> histogram, and an error counter. Prometheus at <code>/metrics</code>.</td></tr>
+        <tr><td>LLM gateway</td><td><code>llm/gateway.py</code></td><td>The only caller of a model. Versioned YAML prompts, PII redaction, tier ladder, response cache, token and cost metering, template fallback.</td></tr>
+        <tr><td>Model tiers</td><td><code>llm/providers.py</code></td><td>Mini <code>openai/gpt-oss-20b</code> for routing; primary <code>openai/gpt-oss-120b</code> for writing and extraction; served by Groq.</td></tr>
+        <tr><td>Streaming</td><td><code>api/v1/chat.py</code></td><td><code>graph.stream(stream_mode=["custom", "values"])</code>: custom frames go to the WebSocket, the last values become the turn's result.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">What isn't a graph: the reviewer copilot, the chase drafter and the consistency explainer in <code>staff.py</code> are single LLM calls behind an endpoint. They have no branching, so a graph would add nothing.</p>
+</section>
+
+<section id="files">
+  <h2>File map</h2>
+<pre class="tree">backend/app/
+├── <b>agents/</b>
+│   ├── graph.py          conversation StateGraph, run_turn()
+│   ├── runtime.py        shared checkpointer, thread_history()
+│   ├── relay_graph.py    reviewer relay graph
+│   ├── state.py          GraphState dataclass the agents use
+│   ├── supervisor.py     intent + sentiment router
+│   ├── fnol_agent.py  claim_status.py  document.py  knowledge.py
+│   ├── escalation.py  empathy.py  handoff.py
+│   └── tools/claim_tools.py   customer-scoped read tools
+├── <b>documents/pipeline.py</b>  document verifier graph, process()
+├── <b>fnol/run_graph.py</b>      registration graph + Flavor
+│   └── registration.py  agentic_registration.py
+├── <b>aiops/</b>                 signals.py  detectors.py  playbooks.py  graph.py
+├── <b>ops/telemetry.py</b>       spans, Prometheus metrics, instrument()
+├── <b>guardrails/</b>            input_guards.py  output_guards.py  pii.py
+├── <b>llm/</b>                   gateway.py  providers.py  prompts/*.yaml
+└── <b>api/v1/</b>                chat.py  documents.py  fnol.py  staff.py  aiops.py</pre>
+</section>
+</main>
+</div>
