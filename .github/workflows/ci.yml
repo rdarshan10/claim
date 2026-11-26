@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: backend:.
+      LLM_ENABLED: "false"
+      AIOPS_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Unit, graph and parity tests
+        run: python -m pytest
+      - name: Generate the synthetic dataset
+        run: python -m datagen.generate --seed 42 --customers 20 --claims-per 2
+      - name: Eval gates (guardrails, grounding, routing)
+        run: python -m evals.run_evals --skip-documents

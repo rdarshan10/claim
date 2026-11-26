@@ -131,40 +131,36 @@ def start(fnol_id: str, started_by: str) -> str:
     return run_id
 
 
-def _run(run_id: str, fnol_id: str) -> None:
-    recorder = _Recorder(run_id)
-    try:
-        result = _drive(recorder, fnol_id)
-        # The claim only becomes real to the product here, exactly as it does on
-        # the scripted path — otherwise picking "agentic" would fill the core
+def _flavor() -> Any:
+    from app.fnol import run_graph
+
+    return run_graph.Flavor(
+        name="agentic",
+        drive=lambda recorder, fnol_id: _drive(recorder, fnol_id),
+        success_event="agentic_run_succeeded", failure_event="agentic_run_failed",
+        failure_label="Run failed", failure_detail_chars=300,
+        error_in_result=True,
+        # The claim only becomes real to the product at materialise, exactly as
+        # on the scripted path — otherwise picking "agentic" would fill the core
         # system's form and leave the customer with no claim.
-        claim_id = registration._materialise(fnol_id, result)
-        result["claim_id"] = claim_id
-        recorder.step("Claim created in ClaimCompanion", result["claim_number"])
-        execute("UPDATE rpa_run SET status = 'SUCCEEDED', result = ?, "
-                "finished_at = ? WHERE id = ?",
-                (json.dumps(result), _now(), run_id))
-        # The same closing sequence as the scripted bot: the notification is
-        # finished and carries its claim, and the customer is told. Leaving the
-        # status behind was what let one notification be registered twice.
-        intake.set_status(fnol_id, "REGISTERED", claim_id=claim_id)
-        audit.record("agentic_run_succeeded", actor_type="agent",
-                     actor_id="registration_bot", entity_type="fnol",
-                     entity_id=fnol_id,
-                     payload={"run_id": run_id, "mode": "agentic",
-                              "claim_number": result.get("claim_number")})
-        registration._notify_customer(fnol_id, result)
-    except Exception as exc:  # noqa: BLE001 - the failure is the finding here
-        recorder.step("Run failed", str(exc)[:300], state="error")
-        execute("UPDATE rpa_run SET status = 'FAILED', result = ?, "
-                "finished_at = ? WHERE id = ?",
-                (json.dumps({"error": str(exc)[:500]}), _now(), run_id))
-        # Back to the reviewer's queue rather than stuck in REGISTERING.
-        intake.set_status(fnol_id, "READY_TO_REGISTER")
-        audit.record("agentic_run_failed", actor_type="agent",
-                     actor_id="registration_bot", entity_type="fnol",
-                     entity_id=fnol_id,
-                     payload={"run_id": run_id, "error": str(exc)[:300]})
+        claim_created_step=True,
+        success_payload=lambda run_id, result: {
+            "run_id": run_id, "mode": "agentic",
+            "claim_number": result.get("claim_number")},
+    )
+
+
+_graph: Any = None
+
+
+def _run(run_id: str, fnol_id: str) -> None:
+    """One run, executed as the shared registration graph (see ``run_graph``)."""
+    global _graph
+    from app.fnol import run_graph
+
+    if _graph is None:
+        _graph = run_graph.build_graph(_flavor())
+    run_graph.run(_graph, _flavor(), run_id, fnol_id, _Recorder(run_id))
 
 
 def _claim_payload(fnol_id: str) -> dict[str, Any]:

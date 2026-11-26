@@ -261,6 +261,43 @@ CREATE TABLE IF NOT EXISTS llm_call (
   ok INTEGER NOT NULL DEFAULT 1,
   trace_id TEXT
 );
+
+-- AIOps: one row per signal per sweep. The detectors' baseline is the recent
+-- history of the same signal, so "unusual" means unusual for this system.
+CREATE TABLE IF NOT EXISTS aiops_snapshot (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  signal TEXT NOT NULL,
+  value REAL NOT NULL,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_aiops_snapshot_signal ON aiops_snapshot(signal, at);
+
+-- AIOps: correlated anomalies from one sweep, the diagnosis, and what was done
+-- about it. thread_id points at the LangGraph checkpoint that holds the paused
+-- run while a manager decides on a high-risk action.
+CREATE TABLE IF NOT EXISTS aiops_incident (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN (
+    'OPEN','AWAITING_APPROVAL','MITIGATED','RESOLVED','DISMISSED')),
+  severity TEXT NOT NULL,
+  detectors TEXT NOT NULL DEFAULT '[]',
+  title TEXT NOT NULL,
+  summary TEXT,
+  root_cause TEXT,
+  diagnosis_source TEXT,
+  confidence REAL,
+  anomalies TEXT NOT NULL DEFAULT '[]',
+  plan TEXT NOT NULL DEFAULT '[]',
+  actions TEXT NOT NULL DEFAULT '[]',
+  verification TEXT NOT NULL DEFAULT '{}',
+  decided_by TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_aiops_incident_status ON aiops_incident(status);
 """
 
 

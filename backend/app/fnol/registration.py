@@ -173,36 +173,33 @@ def start(fnol_id: str, started_by: str) -> str:
     return run_id
 
 
-def _run(run_id: str, fnol_id: str) -> None:
-    recorder = _Recorder(run_id)
-    try:
-        result = _drive(recorder, fnol_id)
-        claim_id = _materialise(fnol_id, result)
-        result["claim_id"] = claim_id
+def _flavor() -> Any:
+    from app.fnol import run_graph
 
-        execute(
-            """UPDATE rpa_run SET status = 'SUCCEEDED', result = ?, finished_at = ?
-               WHERE id = ?""",
-            (json.dumps(result), _now(), run_id),
-        )
-        intake.set_status(fnol_id, "REGISTERED", claim_id=claim_id)
-        audit.record("rpa_run_succeeded", actor_type="agent", actor_id="registration_bot",
-                     entity_type="fnol", entity_id=fnol_id,
-                     payload={"run_id": run_id, "claim_number": result.get("claim_number"),
-                              "mode": result.get("mode")})
-        _notify_customer(fnol_id, result)
-    except Exception as exc:  # noqa: BLE001 — a bot failure must never crash the app
-        recorder.step("Registration failed", str(exc)[:200], state="error")
-        execute(
-            """UPDATE rpa_run SET status = 'FAILED', error = ?, finished_at = ?
-               WHERE id = ?""",
-            (str(exc)[:500], _now(), run_id),
-        )
-        # Back to the reviewer's queue rather than stuck in REGISTERING.
-        intake.set_status(fnol_id, "READY_TO_REGISTER")
-        audit.record("rpa_run_failed", actor_type="agent", actor_id="registration_bot",
-                     entity_type="fnol", entity_id=fnol_id,
-                     payload={"run_id": run_id, "error": str(exc)[:300]})
+    return run_graph.Flavor(
+        name="scripted",
+        # Looked up at call time so the simulation/browser choice stays live.
+        drive=lambda recorder, fnol_id: _drive(recorder, fnol_id),
+        success_event="rpa_run_succeeded", failure_event="rpa_run_failed",
+        failure_label="Registration failed", failure_detail_chars=200,
+        error_in_result=False, claim_created_step=False,
+        success_payload=lambda run_id, result: {
+            "run_id": run_id, "claim_number": result.get("claim_number"),
+            "mode": result.get("mode")},
+    )
+
+
+_graph: Any = None
+
+
+def _run(run_id: str, fnol_id: str) -> None:
+    """One run, executed as the registration graph (see ``run_graph``)."""
+    global _graph
+    from app.fnol import run_graph
+
+    if _graph is None:
+        _graph = run_graph.build_graph(_flavor())
+    run_graph.run(_graph, _flavor(), run_id, fnol_id, _Recorder(run_id))
 
 
 # --------------------------------------------------------------------------

@@ -264,6 +264,88 @@ metered into `llm_call` and audited with its prompt version. Override with
 
 ---
 
+## LangGraph runtime
+
+Each conversation turn runs as a compiled LangGraph `StateGraph`
+(`backend/app/agents/graph.py`): input guard → small talk | route → overrides →
+touch case → {escalation, new_claim, claim_status, documents, knowledge,
+greeting, out_of_scope} → offer human → compose → output guard ⇄ regenerate
+(once) → template fallback → emit. The domain agents are unchanged; a thin
+adapter turns them into nodes. Streaming frames go out through LangGraph's custom
+stream channel.
+
+The other workflows are graphs too:
+
+| Graph | File | Shape |
+|---|---|---|
+| Document verification | `documents/pipeline.py` | load → scan → ocr → classify → extract → validate → gate → verdict, any stage short-circuiting to one `finish` node that writes the verdict |
+| Claim registration (scripted and agentic bots) | `fnol/run_graph.py` | drive → materialise → record_success → notify, any failure → record_failure (FNOL back to the queue) |
+| Reviewer relay and information requests | `agents/relay_graph.py` | render → ground (the reviewer's words are the only source of fact) → deliver |
+| AIOps | `aiops/graph.py` | see below |
+
+Each port was diffed against the original code on the same seeded data with
+the LLM off: 60/60 conversation turns, 20/20 documents, 5/5 registration runs
+(including the failure path) and 3/3 relays came out identical
+(`tests/parity_script.py`, `tests/workflow_parity.py`).
+
+Conversation turns are checkpointed (`GRAPH_CHECKPOINTER=sqlite|memory|none`,
+file at `GRAPH_CHECKPOINT_PATH`) under the thread `conv:<conversation_id>`, so
+any turn can be replayed node by node:
+`GET /api/v1/admin/graph/conversations/{id}/history`.
+
+## AIOps — AI running the operation
+
+An agent (`backend/app/aiops/`, also a LangGraph graph) watches the system itself
+and fixes what it safely can:
+
+```
+collect signals → detect anomalies → dedupe → diagnose (LLM, rule-based fallback)
+  → open incident → auto-run low-risk playbooks
+  → interrupt() for a manager on high-risk ones → verify (re-measure) → close
+```
+
+| Signals it watches | Playbooks it may run |
+|---|---|
+| LLM error rate, p95 latency, cost, cache hit rate | `clear_llm_cache` (low) · `failover_llm_provider` (high) · `enable_template_mode` / `restore_llm` (high) |
+| Template-fallback and grounding-failure rates, injection volume | `clear_llm_cache` (low) |
+| Documents stuck mid-pipeline, review backlog, rejection spikes | `requeue_stuck_documents` (low) |
+| Customer cases past their pick-up SLA | `prioritise_breached_escalations` (low) |
+| Failed or hung registration-bot runs | `fail_hung_registrations` (low) · `retry_failed_registrations` (high) |
+| Claims untouched 30+ days | `schedule_claim_chases` (low) |
+| Thumbs-down rate, share of upset customers | — (surfaced for a person) |
+
+- **Detection is deterministic**: thresholds plus a z-score against the signal's
+  own recent sweeps. Whether something counts as an incident never depends on a model.
+- **The model diagnoses**: it links the anomalies to one root cause and picks
+  which *high-risk* playbooks are warranted. It can only name ids from the
+  catalogue that apply to what fired; anything else is dropped and recorded.
+- **High-risk actions always wait for a manager.** The paused run sits in the
+  checkpointer and resumes on their decision, even after a restart.
+- Everything is hash-chained into the audit log.
+
+Manager UI: **Oversight → AIOps**. API: `/api/v1/admin/aiops/*`. Sweeps run every
+`AIOPS_INTERVAL_SECONDS` (default 300); `AIOPS_ENABLED=false` turns the timer off,
+and `AIOPS_AUTO_REMEDIATE=false` makes low-risk fixes wait for approval too.
+
+### Telemetry
+
+- `GET /metrics`: Prometheus series for graph node latency and errors, turns by
+  intent and outcome, LLM calls, tokens and cost, guardrail events, and AIOps
+  anomalies and remediations.
+- OpenTelemetry spans for every graph node and turn. They are exported over
+  OTLP/HTTP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the most recent ones
+  are kept in memory at `GET /api/v1/admin/ops/traces?trace_id=…`.
+
+### Tests
+
+```powershell
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m pytest
+```
+
+The suite (40 tests) runs in template mode against a throwaway database. CI
+(`.github/workflows/ci.yml`) runs it plus the eval gates on every push.
+
 ## Layout
 
 ```

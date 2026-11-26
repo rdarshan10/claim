@@ -1,28 +1,50 @@
-"""Conversation graph (§9 topology).
+"""Conversation graph (§9 topology), built on LangGraph.
 
-InputGuardrails -> Sentiment/Router -> {StatusAgent | DocumentAgent |
-KnowledgeAgent | Escalation} -> EmpathyResponder -> OutputGuardrails
-                                                     -> Regenerate (once)
-                                                     -> TemplateFallback
+    input_guard ─┬─► blocked ─────────────────────────────────────────► END
+                 ├─► small_talk ─► finalize ──────────────────────────► END
+                 └─► route ─► overrides ─► touch_case ─┬─► greeting / out_of_scope ─► finalize
+                                                       ├─► escalation ─┐
+                                                       └─► agent:{new_claim, claim_status,
+                                                            documents, knowledge} ─┤
+                     offer_human ◄────────────────────────────────────────────────┘
+                          │
+                       compose ─► output_guard ─┬─► emit ─► END
+                                    ▲           ├─► regenerate ─┘ (once)
+                                    └───────────┴─► template_fallback ─► emit
 
-Implemented as an explicit state machine over ``GraphState`` rather than
-LangGraph (not installable in this environment). Node signatures and the state
-object match LangGraph's shape, so migration is wiring, not redesign — see
-TO_BE_DONE.md.
+Each node is instrumented (OTel span + Prometheus histogram) and every
+super-step is checkpointed under the thread ``conv:<conversation_id>``, so any
+turn can be replayed node by node. Streaming frames go out through LangGraph's
+custom stream channel (``get_stream_writer``) rather than a callback threaded
+through every function.
+
+The domain agents (``supervisor``, ``claim_status`` …) are unchanged: they take
+and mutate a ``GraphState``. ``_node`` adapts them to LangGraph's
+dict-in / partial-update-out contract.
 """
 from __future__ import annotations
 
+import copy
 import re
 import uuid
+from dataclasses import fields as dc_fields
 from datetime import datetime, timezone
-from typing import Any, Callable
+from functools import lru_cache
+from typing import Any, Callable, TypedDict
+
+from langgraph.config import get_stream_writer
+from langgraph.graph import END, START, StateGraph
 
 from app.agents import (claim_status, document, empathy, escalation, fnol_agent,
                         knowledge, supervisor)
+from app.agents import runtime
 from app.agents.state import GraphState
 from app.audit import logger as audit
 from app.db import execute, query_one
 from app.guardrails import input_guards, output_guards
+from app.ops import telemetry
+
+GRAPH = "conversation"
 
 AGENTS: dict[str, Callable[[GraphState], GraphState]] = {
     "new_claim": fnol_agent.run,
@@ -30,6 +52,346 @@ AGENTS: dict[str, Callable[[GraphState], GraphState]] = {
     "documents": document.run,
     "knowledge": knowledge.run,
 }
+
+_STATE_FIELDS = [f.name for f in dc_fields(GraphState)]
+
+
+class TurnState(TypedDict, total=False):
+    # --- GraphState fields (see state.py) ---------------------------------
+    customer_id: str
+    customer_name: str
+    conversation_id: str
+    trace_id: str
+    message: str
+    history: list[dict[str, Any]]
+    active_claim_id: str | None
+    intent: str | None
+    intent_confidence: float
+    sentiment: str
+    tone_profile: str
+    facts: dict[str, Any]
+    cards: list[dict[str, Any]]
+    citations: list[dict[str, Any]]
+    draft: str
+    reply: str
+    guardrail_flags: list[str]
+    blocked: bool
+    escalation_ticket_id: str | None
+    turn_hop_count: int
+    degraded: bool
+    regenerated: bool
+    # --- graph control ------------------------------------------------------
+    handoff: dict[str, Any] | None
+    route: str
+    block_category: str | None
+    output_attempt: int
+    output_passed: bool
+    output_failures: list[str]
+
+
+# --------------------------------------------------------------------------
+# adapters
+# --------------------------------------------------------------------------
+def _to_state(values: dict[str, Any]) -> GraphState:
+    # Deep-copied so an agent mutating a list in place can't alter the
+    # checkpointed value behind LangGraph's back.
+    return GraphState(**{k: copy.deepcopy(values[k]) for k in _STATE_FIELDS if k in values})
+
+
+def _from_state(state: GraphState) -> dict[str, Any]:
+    return {k: getattr(state, k) for k in _STATE_FIELDS}
+
+
+def _send(frame: dict[str, Any]) -> None:
+    try:
+        get_stream_writer()(frame)
+    except Exception:  # noqa: BLE001 - outside a streaming run there is no writer
+        pass
+
+
+def _node(name: str, fn: Callable[[GraphState, dict[str, Any]], dict[str, Any] | None]):
+    """Adapt ``fn(GraphState, raw_values) -> extra updates`` into a graph node."""
+
+    def run(values: dict[str, Any]) -> dict[str, Any]:
+        state = _to_state(values)
+        extra = fn(state, values) or {}
+        return {**_from_state(state), **extra}
+
+    return telemetry.instrument(GRAPH, name, run)
+
+
+# --------------------------------------------------------------------------
+# nodes
+# --------------------------------------------------------------------------
+def _input_guard(state: GraphState, values: dict[str, Any]) -> dict[str, Any]:
+    verdict = input_guards.check_input(state.message)
+    if verdict.allowed:
+        state.guardrail_flags.extend(verdict.flags)
+        return {"route": "small_talk" if supervisor.is_small_talk(state.message) else "route",
+                "block_category": None}
+
+    state.blocked = True
+    state.guardrail_flags.extend(verdict.flags or [verdict.category or "blocked"])
+    state.reply = verdict.safe_response or "I can't help with that, I'm afraid."
+    telemetry.GUARDRAIL_EVENTS.labels(f"input_block_{verdict.category or 'other'}").inc()
+    audit.record(
+        "guardrail_block", actor_type="customer", actor_id=state.customer_id,
+        entity_type="conversation", entity_id=state.conversation_id,
+        payload={"category": verdict.category, "reason": verdict.reason,
+                 "message_preview": state.message[:200]},
+        trace_id=state.trace_id,
+    )
+    return {"route": "blocked", "block_category": verdict.category}
+
+
+def _blocked(state: GraphState, values: dict[str, Any]) -> None:
+    # Distress is a block *and* an escalation (§17.2, UC-N10).
+    if values.get("block_category") == "distress":
+        state.sentiment = "distressed"  # type: ignore[assignment]
+        state.tone_profile = "gentle-supportive"  # type: ignore[assignment]
+        escalation.run(state, reason="Distress signals detected in conversation")
+        _send({"type": "handoff", **state.cards[-1]["payload"]})
+    _send({"type": "token", "content": state.reply})
+    _send({"type": "done", "blocked": True, "category": values.get("block_category")})
+    telemetry.TURNS.labels("blocked", "blocked").inc()
+
+
+def _small_talk(state: GraphState, values: dict[str, Any]) -> None:
+    # Answered before routing: a classifier with no "greeting" label files "hi"
+    # under out_of_scope and refuses it.
+    state.intent = "greeting"  # type: ignore[assignment]
+    state.reply = _greeting_reply(state, state.customer_id)
+
+
+def _route(state: GraphState, values: dict[str, Any]) -> None:
+    supervisor.route(state)
+    _send({"type": "status", "stage": "routing", "intent": state.intent,
+           "sentiment": state.sentiment})
+    audit.record(
+        "agent_routing", actor_type="agent", actor_id="supervisor",
+        entity_type="conversation", entity_id=state.conversation_id,
+        payload={"intent": state.intent, "confidence": state.intent_confidence,
+                 "sentiment": state.sentiment},
+        trace_id=state.trace_id,
+    )
+
+
+def _overrides(state: GraphState, values: dict[str, Any]) -> None:
+    """Three deterministic overrides the classifier must not undo.
+
+    * a bare "yes" to an offer of a colleague is accepting that offer (checked
+      first: an open intake must not swallow it),
+    * an unambiguous "I want to make a claim" is new_claim, and
+    * an open intake captures the next message — "yesterday" or "£400" is an
+      answer to the question just asked — unless it is plainly a question
+      about existing claims.
+    """
+    if _accepted_offer(state):
+        state.intent = "human_request"  # type: ignore[assignment]
+        state.intent_confidence = 1.0
+    elif fnol_agent.wants_to_start(state.message):
+        state.intent = "new_claim"  # type: ignore[assignment]
+        state.intent_confidence = max(state.intent_confidence, 0.9)
+    elif state.intent not in ("human_request", "out_of_scope"):
+        from app.fnol import intake as _intake
+
+        if (_intake.open_for_customer(state.customer_id)
+                and not _asks_about_existing(state.message)):
+            state.intent = "new_claim"  # type: ignore[assignment]
+
+
+def _touch_case(state: GraphState, values: dict[str, Any]) -> None:
+    """Keep an open case current: the reviewer needs the latest words and mood."""
+    handoff = values.get("handoff")
+    if not (handoff and handoff.get("ticket_id")):
+        return
+    try:
+        ticket = escalation.load_ticket(handoff["ticket_id"])
+        if ticket:
+            escalation.touch_case(state, ticket, chased=state.intent == "human_request")
+    except Exception as exc:  # noqa: BLE001 - never fail a reply over this
+        audit.record("case_touch_failed", entity_type="conversation",
+                     entity_id=state.conversation_id,
+                     payload={"error": str(exc)[:200]}, trace_id=state.trace_id)
+
+
+def _greeting(state: GraphState, values: dict[str, Any]) -> None:
+    state.reply = _greeting_reply(state, state.customer_id)
+
+
+def _out_of_scope(state: GraphState, values: dict[str, Any]) -> None:
+    state.reply = input_guards.SAFE_RESPONSES["out_of_scope"]
+
+
+def _escalate(state: GraphState, values: dict[str, Any]) -> None:
+    escalation.run(state)
+
+
+def _agent(intent: str):
+    def run(state: GraphState, values: dict[str, Any]) -> None:
+        if not state.hop(intent):
+            state.guardrail_flags.append("hop_budget_exceeded")
+            return
+        AGENTS.get(intent, knowledge.run)(state)
+    return run
+
+
+def _offer_human(state: GraphState, values: dict[str, Any]) -> None:
+    """Frustration is a reason to *ask* whether they want a colleague — once."""
+    if (state.sentiment == "frustrated"
+            and state.intent not in ("human_request", "out_of_scope", "new_claim")
+            and not values.get("handoff")
+            and not state.escalation_ticket_id
+            and not _already_offered(state)):
+        state.cards.append({"card_type": "offer_human",
+                            "payload": {"reason": "sounds frustrating"}})
+        _mark_offer(state)
+
+
+def _compose(state: GraphState, values: dict[str, Any]) -> dict[str, Any]:
+    handoff = values.get("handoff")
+    if handoff:
+        state.facts["human_review_in_progress"] = handoff
+        if state.intent != "human_request":
+            state.cards.append({"card_type": "handoff_status", "payload": handoff})
+    _send({"type": "status", "stage": "composing"})
+    empathy.run(state)
+    return {"output_attempt": 0}
+
+
+def _grounding(state: GraphState) -> dict[str, Any]:
+    return {"facts": state.facts, "citations": state.citations,
+            "customer_name": state.customer_name}
+
+
+def _output_guard(state: GraphState, values: dict[str, Any]) -> dict[str, Any]:
+    attempt = int(values.get("output_attempt") or 0) + 1
+    # Intake turns ask questions rather than asserting facts; the text is ours.
+    if attempt == 1 and state.intent == "new_claim":
+        check = output_guards.OutputVerdict()
+    else:
+        check = output_guards.check_output(state.reply, _grounding(state))
+
+    if attempt == 1:
+        if not check.passed:
+            state.guardrail_flags.append("output_guard_fail")
+            telemetry.GUARDRAIL_EVENTS.labels("output_fail").inc()
+            audit.record(
+                "guardrail_output_fail", actor_type="agent", actor_id="output_guards",
+                entity_type="conversation", entity_id=state.conversation_id,
+                payload={"failures": check.failures, "ungrounded": check.ungrounded,
+                         "attempt": 1},
+                trace_id=state.trace_id,
+            )
+        state.guardrail_flags.extend(check.warnings)
+    return {"output_attempt": attempt, "output_passed": check.passed,
+            "output_failures": list(check.failures)}
+
+
+def _regenerate(state: GraphState, values: dict[str, Any]) -> None:
+    state.regenerated = True
+    telemetry.GUARDRAIL_EVENTS.labels("regenerate").inc()
+    empathy.run(state)
+
+
+def _template_fallback(state: GraphState, values: dict[str, Any]) -> None:
+    state.reply = empathy._template(state)
+    state.degraded = True
+    state.guardrail_flags.append("template_fallback")
+    telemetry.GUARDRAIL_EVENTS.labels("template_fallback").inc()
+    audit.record(
+        "guardrail_template_fallback", actor_type="agent", actor_id="output_guards",
+        entity_type="conversation", entity_id=state.conversation_id,
+        payload={"failures": values.get("output_failures", [])}, trace_id=state.trace_id,
+    )
+
+
+def _finalize(state: GraphState, values: dict[str, Any]) -> None:
+    """Short answers (greeting, out of scope): reply + done, then audit."""
+    _send({"type": "token", "content": state.reply})
+    _send({"type": "done", "intent": state.intent})
+    _audit_turn(state)
+    telemetry.TURNS.labels(state.intent or "none", "direct").inc()
+
+
+def _emit(state: GraphState, values: dict[str, Any]) -> None:
+    _send({"type": "token", "content": state.reply})
+    for card in state.cards:
+        _send({"type": "card", "card_type": card["card_type"], "payload": card["payload"]})
+    if state.citations:
+        _send({"type": "citations", "items": state.citations})
+    _send({"type": "done", "intent": state.intent, "degraded": state.degraded})
+    _audit_turn(state)
+    outcome = ("template_fallback" if "template_fallback" in state.guardrail_flags
+               else "degraded" if state.degraded else "ok")
+    telemetry.TURNS.labels(state.intent or "none", outcome).inc()
+
+
+# --------------------------------------------------------------------------
+# edges
+# --------------------------------------------------------------------------
+def _after_guard(values: dict[str, Any]) -> str:
+    return values.get("route") or "route"
+
+
+def _dispatch(values: dict[str, Any]) -> str:
+    intent = values.get("intent") or "knowledge"
+    if intent in ("greeting", "out_of_scope"):
+        return intent
+    if intent == "human_request":
+        return "escalation"
+    return f"agent_{intent}" if intent in AGENTS else "agent_knowledge"
+
+
+def _after_output_guard(values: dict[str, Any]) -> str:
+    if values.get("output_passed"):
+        return "emit"
+    return "regenerate" if int(values.get("output_attempt") or 0) < 2 else "template_fallback"
+
+
+def build_graph(checkpointer: Any = None) -> Any:
+    g = StateGraph(TurnState)
+    nodes: dict[str, Callable] = {
+        "input_guard": _input_guard, "blocked": _blocked, "small_talk": _small_talk,
+        "route": _route, "overrides": _overrides, "touch_case": _touch_case,
+        "greeting": _greeting, "out_of_scope": _out_of_scope, "escalation": _escalate,
+        "offer_human": _offer_human, "compose": _compose,
+        "output_guard": _output_guard, "regenerate": _regenerate,
+        "template_fallback": _template_fallback, "finalize": _finalize, "emit": _emit,
+    }
+    nodes.update({f"agent_{intent}": _agent(intent) for intent in AGENTS})
+    for name, fn in nodes.items():
+        g.add_node(name, _node(name, fn))
+
+    g.add_edge(START, "input_guard")
+    g.add_conditional_edges("input_guard", _after_guard,
+                            ["blocked", "small_talk", "route"])
+    g.add_edge("blocked", END)
+    g.add_edge("small_talk", "finalize")
+    g.add_edge("route", "overrides")
+    g.add_edge("overrides", "touch_case")
+    g.add_conditional_edges("touch_case", _dispatch,
+                            ["greeting", "out_of_scope", "escalation",
+                             *[f"agent_{i}" for i in AGENTS]])
+    g.add_edge("greeting", "finalize")
+    g.add_edge("out_of_scope", "finalize")
+    g.add_edge("escalation", "offer_human")
+    for intent in AGENTS:
+        g.add_edge(f"agent_{intent}", "offer_human")
+    g.add_edge("offer_human", "compose")
+    g.add_edge("compose", "output_guard")
+    g.add_conditional_edges("output_guard", _after_output_guard,
+                            ["emit", "regenerate", "template_fallback"])
+    g.add_edge("regenerate", "output_guard")
+    g.add_edge("template_fallback", "emit")
+    g.add_edge("finalize", END)
+    g.add_edge("emit", END)
+    return g.compile(checkpointer=checkpointer)
+
+
+@lru_cache(maxsize=1)
+def compiled() -> Any:
+    return build_graph(runtime.checkpointer())
 
 
 def run_turn(
@@ -43,228 +405,38 @@ def run_turn(
     handoff: dict[str, Any] | None = None,
     emit: Callable[[dict[str, Any]], None] | None = None,
 ) -> GraphState:
-    """Execute one conversational turn end to end.
+    """Execute one conversational turn end to end through the graph.
 
-    ``handoff`` describes any live human review. The assistant keeps answering
-    throughout — it is always the customer's contact — but it knows a colleague
-    is on the case and says so rather than pretending otherwise.
+    ``handoff`` describes any live human review: the assistant keeps answering,
+    but it knows a colleague is on the case and says so.
     """
-    state = GraphState(
-        customer_id=customer_id,
-        customer_name=customer_name,
-        conversation_id=conversation_id,
-        trace_id=str(uuid.uuid4()),
-        message=message,
-        history=history or [],
-        active_claim_id=active_claim_id,
+    initial = GraphState(
+        customer_id=customer_id, customer_name=customer_name,
+        conversation_id=conversation_id, trace_id=str(uuid.uuid4()),
+        message=message, history=history or [], active_claim_id=active_claim_id,
     )
+    # Every key is supplied, so nothing from the thread's previous turn leaks in.
+    inputs: dict[str, Any] = {
+        **_from_state(initial), "handoff": handoff, "route": "",
+        "block_category": None, "output_attempt": 0, "output_passed": False,
+        "output_failures": [],
+    }
+    graph = compiled()
+    config = {"configurable": {"thread_id": f"conv:{conversation_id or initial.trace_id}"},
+              "run_name": "conversation_turn",
+              "metadata": {"trace_id": initial.trace_id, "customer_id": customer_id}}
 
-    def send(frame: dict[str, Any]) -> None:
-        if emit:
-            emit(frame)
-
-    # --- node: input guardrails ----------------------------------------
-    verdict = input_guards.check_input(message)
-    if not verdict.allowed:
-        state.blocked = True
-        state.guardrail_flags.extend(verdict.flags or [verdict.category or "blocked"])
-        state.reply = verdict.safe_response or "I can't help with that, I'm afraid."
-
-        audit.record(
-            "guardrail_block", actor_type="customer", actor_id=customer_id,
-            entity_type="conversation", entity_id=conversation_id,
-            payload={"category": verdict.category, "reason": verdict.reason,
-                     "message_preview": message[:200]},
-            trace_id=state.trace_id,
-        )
-
-        # Distress is a block *and* an escalation (§17.2, UC-N10).
-        if verdict.category == "distress":
-            state.sentiment = "distressed"  # type: ignore[assignment]
-            state.tone_profile = "gentle-supportive"  # type: ignore[assignment]
-            escalation.run(state, reason="Distress signals detected in conversation")
-            send({"type": "handoff", **state.cards[-1]["payload"]})
-
-        send({"type": "token", "content": state.reply})
-        send({"type": "done", "blocked": True, "category": verdict.category})
-        return state
-
-    state.guardrail_flags.extend(verdict.flags)
-
-    # --- node: small talk -------------------------------------------------
-    # Answered before routing: a classifier with no "greeting" label files "hi"
-    # under out_of_scope and refuses it. Costs nothing and can't be misrouted.
-    if supervisor.is_small_talk(message):
-        state.intent = "greeting"  # type: ignore[assignment]
-        state.reply = _greeting_reply(state, customer_id)
-        send({"type": "token", "content": state.reply})
-        send({"type": "done", "intent": "greeting"})
-        _audit_turn(state)
-        return state
-
-    # --- node: router + sentiment ---------------------------------------
-    supervisor.route(state)
-    send({"type": "status", "stage": "routing", "intent": state.intent,
-          "sentiment": state.sentiment})
-
-    audit.record(
-        "agent_routing", actor_type="agent", actor_id="supervisor",
-        entity_type="conversation", entity_id=conversation_id,
-        payload={"intent": state.intent, "confidence": state.intent_confidence,
-                 "sentiment": state.sentiment},
-        trace_id=state.trace_id,
-    )
-
-    # --- node: notification of loss -------------------------------------
-    # Three deterministic overrides the classifier must not undo:
-    #   * a bare "yes" to an offer of a colleague is accepting that offer,
-    #   * an unambiguous "I want to make a claim" is new_claim regardless of
-    #     what the model said, and
-    #   * once an intake is open, the customer's next message is almost always
-    #     the answer to the question just asked. "Yesterday" or "£400" carries
-    #     no intent signal at all and would otherwise route to knowledge.
-    # "Yes" after we offered a colleague is an answer to that question, not a
-    # new topic. Checked first: an open intake must not swallow it, or the
-    # customer accepts the offer and gets asked for their incident date.
-    if _accepted_offer(state):
-        state.intent = "human_request"  # type: ignore[assignment]
-        state.intent_confidence = 1.0
-    elif fnol_agent.wants_to_start(message):
-        state.intent = "new_claim"  # type: ignore[assignment]
-        state.intent_confidence = max(state.intent_confidence, 0.9)
-    elif state.intent not in ("human_request", "out_of_scope"):
-        from app.fnol import intake as _intake
-
-        # An open intake captures the next message, because "yesterday" or
-        # "£400" is an answer to the question just asked and carries no intent
-        # signal of its own. But a plain question about existing claims is not
-        # an answer to anything — swallowing those meant a customer part-way
-        # through reporting an incident could not ask what else was on their
-        # account without abandoning the intake first.
-        if _intake.open_for_customer(customer_id) and not _asks_about_existing(message):
-            state.intent = "new_claim"  # type: ignore[assignment]
-
-    # --- node: keep an open case current --------------------------------
-    # Whatever they asked about, if a colleague is working their case the
-    # reviewer needs the customer's latest words and mood. "Why is this taking
-    # so long" routes to claim_status, but it is exactly what they should see.
-    if handoff and handoff.get("ticket_id"):
-        try:
-            ticket = escalation.load_ticket(handoff["ticket_id"])
-            if ticket:
-                escalation.touch_case(state, ticket,
-                                      chased=state.intent == "human_request")
-        except Exception as exc:  # noqa: BLE001 - never fail a reply over this
-            audit.record("case_touch_failed", entity_type="conversation",
-                         entity_id=conversation_id,
-                         payload={"error": str(exc)[:200]}, trace_id=state.trace_id)
-
-    # --- node: specialised agent ----------------------------------------
-    if state.intent == "greeting":
-        state.reply = _greeting_reply(state, customer_id)
-        send({"type": "token", "content": state.reply})
-        send({"type": "done", "intent": "greeting"})
-        _audit_turn(state)
-        return state
-    if state.intent == "human_request":
-        escalation.run(state)
-    elif state.intent == "out_of_scope":
-        state.reply = input_guards.SAFE_RESPONSES["out_of_scope"]
-        send({"type": "token", "content": state.reply})
-        send({"type": "done", "intent": "out_of_scope"})
-        _audit_turn(state)
-        return state
-    else:
-        agent = AGENTS.get(state.intent or "knowledge", knowledge.run)
-        if not state.hop(state.intent or "knowledge"):
-            state.guardrail_flags.append("hop_budget_exceeded")
-        else:
-            agent(state)
-
-    # --- node: offer a person (never decide for them) --------------------
-    # Frustration is a reason to *ask* whether they want a colleague, not to
-    # open a case on their behalf. Only when nothing is already open, and only
-    # when they haven't just asked for one — that path escalates for real.
-    #
-    # Offered at most once per conversation, and only on frustration. Repeating
-    # it every turn undercut the assistant: a customer who is merely confused
-    # wants an answer, and one who is frustrated has already been asked and
-    # said no. Anyone who wants a person can still say so at any point, which
-    # routes to human_request and escalates directly.
-    if (state.sentiment == "frustrated"
-            and state.intent not in ("human_request", "out_of_scope", "new_claim")
-            and not handoff
-            and not state.escalation_ticket_id
-            and not _already_offered(state)):
-        state.cards.append({
-            "card_type": "offer_human",
-            "payload": {
-                "reason": "sounds frustrating" if state.sentiment == "frustrated"
-                          else "not straightforward",
-            },
-        })
-        # Remember we asked, so their answer means something next turn.
-        _mark_offer(state)
-
-    # --- node: empathy responder ----------------------------------------
-    # If a colleague is already on the case, that is a fact the customer is
-    # entitled to, so it joins the verified set rather than being hidden.
-    if handoff:
-        state.facts["human_review_in_progress"] = handoff
-        if state.intent != "human_request":
-            state.cards.append({"card_type": "handoff_status", "payload": handoff})
-
-    send({"type": "status", "stage": "composing"})
-    empathy.run(state)
-
-    # --- node: output guardrails ----------------------------------------
-    grounding_source = {"facts": state.facts, "citations": state.citations,
-                        "customer_name": state.customer_name}
-    # Intake turns ask questions rather than asserting anything about a claim,
-    # so there are no facts to ground them against. The text is ours, not the
-    # model's, which is what the guardrail exists to police.
-    check = (output_guards.OutputVerdict()
-             if state.intent == "new_claim"
-             else output_guards.check_output(state.reply, grounding_source))
-
-    if not check.passed:
-        state.guardrail_flags.append("output_guard_fail")
-        audit.record(
-            "guardrail_output_fail", actor_type="agent", actor_id="output_guards",
-            entity_type="conversation", entity_id=conversation_id,
-            payload={"failures": check.failures, "ungrounded": check.ungrounded,
-                     "attempt": 1},
-            trace_id=state.trace_id,
-        )
-
-        # Regenerate once, then fall back to the deterministic template.
-        state.regenerated = True
-        empathy.run(state)
-        recheck = output_guards.check_output(state.reply, grounding_source)
-        if not recheck.passed:
-            state.reply = empathy._template(state)
-            state.degraded = True
-            state.guardrail_flags.append("template_fallback")
-            audit.record(
-                "guardrail_template_fallback", actor_type="agent",
-                actor_id="output_guards", entity_type="conversation",
-                entity_id=conversation_id,
-                payload={"failures": recheck.failures}, trace_id=state.trace_id,
-            )
-
-    for warning in check.warnings:
-        state.guardrail_flags.append(warning)
-
-    # --- emit ------------------------------------------------------------
-    send({"type": "token", "content": state.reply})
-    for card in state.cards:
-        send({"type": "card", "card_type": card["card_type"], "payload": card["payload"]})
-    if state.citations:
-        send({"type": "citations", "items": state.citations})
-    send({"type": "done", "intent": state.intent, "degraded": state.degraded})
-
-    _audit_turn(state)
-    return state
+    final: dict[str, Any] = inputs
+    with telemetry.span("conversation.turn", **{"cc.trace_id": initial.trace_id,
+                                                "cc.conversation_id": conversation_id}):
+        for mode, chunk in graph.stream(inputs, config, stream_mode=["custom", "values"]):
+            if mode == "custom":
+                if emit:
+                    emit(chunk)
+            else:
+                final = chunk
+    telemetry.GRAPH_RUNS.labels(GRAPH, "ok").inc()
+    return _to_state(final)
 
 
 def _greeting_reply(state: GraphState, customer_id: str) -> str:
